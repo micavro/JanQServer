@@ -685,7 +685,7 @@ def _render_turn(turn: ReplayTurn, table: NyukyuTable) -> str:
     </div>
     <div class="balls">球数 {turn.balls_before} → {turn.balls_after_draw}</div>
   </div>
-  {_area_bar(turn.area_decision.area)}
+  {_area_bar(turn.area_decision.area, turn.area_decision.target_tiles, table)}
   <div class="probability-panel">
     <div class="probability-head">
       <h4>区域概率</h4>
@@ -727,13 +727,17 @@ def _render_turn(turn: ReplayTurn, table: NyukyuTable) -> str:
 """
 
 
-def _area_bar(active_area: int) -> str:
+def _area_bar(active_area: int, targets: tuple[int, ...], table: NyukyuTable) -> str:
     buttons = []
     for area in range(1, AREA_COUNT + 1):
         selected = " selected" if area == active_area else ""
+        score = sum(table.tile_weight(area, tile_id) for tile_id in targets)
         buttons.append(
             f'<button class="area{selected}" type="button" data-area="{area}" '
-            f'onclick="showArea(this)"><span>区域 {area}</span></button>'
+            f'onclick="showArea(this)">'
+            f'<span class="area-label">区域 {area}</span>'
+            f'<span class="area-score">{score}</span>'
+            f"</button>"
         )
     return f'<div class="area-bar">{"".join(buttons)}</div>'
 
@@ -1403,12 +1407,32 @@ h1 {
   color: var(--ink);
   cursor: pointer;
   font-weight: 700;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  line-height: 1.15;
 }
 
 .area:hover,
 .area.selected {
   border-color: var(--teal);
   background: #e7f5f2;
+  color: var(--teal-dark);
+}
+
+.area-label {
+  font-size: 13px;
+}
+
+.area-score {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.area.selected .area-score {
   color: var(--teal-dark);
 }
 

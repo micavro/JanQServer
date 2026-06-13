@@ -267,10 +267,42 @@ class RouteEvStrategyTests(unittest.TestCase):
         area = choose_route_ev_area(next_hand, table, balls=5)
 
         self.assertEqual(22, discard.discard_tile)
-        self.assertIn("honitsu_sou:next_area=3:p=0.470", discard.reason)
+        self.assertIn("honitsu_sou:next_area=3:p=0.820", discard.reason)
         self.assertEqual(3, area.area)
-        self.assertEqual((11, 12, 14, 27, 28, 32), area.target_tiles)
-        self.assertEqual(4700, area.target_weight)
+        self.assertEqual((9, 10, 11, 12, 13, 14, 15, 16, 17, 27, 28, 32), area.target_tiles)
+        self.assertEqual(8200, area.target_weight)
+
+    def test_honitsu_keeps_off_suit_pair_and_builds_pin_meld_when_balls_remain(self):
+        hand = (
+            13,
+            13,
+            18,
+            19,
+            19,
+            19,
+            19,
+            20,
+            23,
+            24,
+            25,
+            27,
+            29,
+            30,
+        )
+        table = load_tables()["nyukyu_base_table.bytes"]
+
+        discard = choose_route_ev_discard(hand, balls=6, drawn_tile=13)
+        next_hand = list(hand)
+        next_hand.remove(discard.discard_tile)
+        area = choose_route_ev_area(next_hand, table, balls=6)
+
+        self.assertEqual(27, discard.discard_tile)
+        self.assertIn("honitsu_pin:next_area=7", discard.reason)
+        self.assertIn(13, next_hand)
+        self.assertEqual(2, next_hand.count(13))
+        self.assertEqual(7, area.area)
+        self.assertEqual((18, 20, 21, 22, 23, 24, 25, 26, 29, 30), area.target_tiles)
+        self.assertEqual(9600, area.target_weight)
 
     def test_suuankou_route_converts_to_chiitoi_when_remaining_balls_cannot_complete(self):
         hand = (

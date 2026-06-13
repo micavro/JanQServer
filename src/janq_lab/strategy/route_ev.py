@@ -120,7 +120,12 @@ def choose_route_ev_area(
             )
         return choose_public_area(state, table)
     if active_route.name.startswith("honitsu_"):
-        targets = _honitsu_progress_targets(state, active_route.name)
+        targets = _honitsu_progress_targets(
+            state,
+            active_route.name,
+            balls,
+            table.areas,
+        )
         if targets:
             return _area_decision_from_estimate(
                 table,
@@ -846,8 +851,9 @@ def _honitsu_lookahead_discard(
             continue
         route_candidates.append(
             (
-                -post_route.missing,
                 -shanten(after),
+                -post_route.missing,
+                _honitsu_discard_shape_guard(hand, tile_id, route.name, balls),
                 tile_id,
                 after,
                 post_route,
@@ -856,14 +862,16 @@ def _honitsu_lookahead_discard(
     if not route_candidates:
         return _normal_lookahead_discard(hand, balls, areas)
 
-    best_missing = max(candidate[0] for candidate in route_candidates)
-    shortest = [candidate for candidate in route_candidates if candidate[0] == best_missing]
-    best_shanten = max(candidate[1] for candidate in shortest)
-    finalists = [candidate for candidate in shortest if candidate[1] == best_shanten]
+    best_shanten = max(candidate[0] for candidate in route_candidates)
+    shanten_best = [candidate for candidate in route_candidates if candidate[0] == best_shanten]
+    best_missing = max(candidate[1] for candidate in shanten_best)
+    shortest = [candidate for candidate in shanten_best if candidate[1] == best_missing]
+    best_guard = max(candidate[2] for candidate in shortest)
+    finalists = [candidate for candidate in shortest if candidate[2] == best_guard]
 
     candidates = []
-    for _, _, tile_id, after, post_route in finalists:
-        targets = _honitsu_progress_targets(after, route.name)
+    for _, _, _, tile_id, after, post_route in finalists:
+        targets = _honitsu_progress_targets(after, route.name, balls, areas)
         next_area = _next_area_estimate(after.counts, targets, areas)
         candidates.append(
             (
@@ -931,8 +939,28 @@ def _route_estimate_by_name(
     )
 
 
-def _honitsu_progress_targets(hand: TileSet, route_name: str) -> tuple[int, ...]:
-    allowed = _route_suit(route_name) | HONORS
+def _honitsu_progress_targets(
+    hand: TileSet,
+    route_name: str,
+    balls: int,
+    areas: tuple[tuple[int, ...], ...],
+) -> tuple[int, ...]:
+    del areas
+    suit = _route_suit(route_name)
+    allowed = suit | HONORS
+    if balls >= 4 and _honitsu_should_build_suit_meld(hand, suit):
+        suit_targets = [
+            tile_id
+            for tile_id in sorted(suit)
+            if hand.counts[tile_id] < 4
+        ]
+        held_honors = [
+            tile_id
+            for tile_id in sorted(HONORS)
+            if 0 < hand.counts[tile_id] < 4
+        ]
+        return tuple(suit_targets + held_honors)
+
     efficient = tuple(
         tile_id
         for tile_id in improving_tiles(hand)
@@ -945,6 +973,43 @@ def _honitsu_progress_targets(hand: TileSet, route_name: str) -> tuple[int, ...]
         for tile_id in sorted(allowed)
         if hand.counts[tile_id] < 4
     )
+
+
+def _honitsu_should_build_suit_meld(hand: TileSet, suit: frozenset[int]) -> bool:
+    suit_count = sum(hand.counts[tile_id] for tile_id in suit)
+    pairish = sum(1 for tile_id in suit if hand.counts[tile_id] >= 2)
+    triplets = sum(1 for tile_id in suit if hand.counts[tile_id] >= 3)
+    sequences = _suit_sequence_count(hand.counts, suit)
+    return suit_count >= 7 and (pairish + triplets + sequences) >= 3
+
+
+def _suit_sequence_count(counts: tuple[int, ...], suit: frozenset[int]) -> int:
+    start = min(suit)
+    work = [counts[start + rank] for rank in range(9)]
+    sequences = 0
+    for rank in range(7):
+        while work[rank] and work[rank + 1] and work[rank + 2]:
+            work[rank] -= 1
+            work[rank + 1] -= 1
+            work[rank + 2] -= 1
+            sequences += 1
+    return sequences
+
+
+def _honitsu_discard_shape_guard(
+    hand: TileSet,
+    tile_id: int,
+    route_name: str,
+    balls: int,
+) -> int:
+    count = hand.counts[tile_id]
+    if count >= 3:
+        return -100
+    if balls >= 4 and tile_id not in (_route_suit(route_name) | HONORS):
+        if count >= 2:
+            return -8
+        return 0
+    return 0
 
 
 def _yakuman_tenpai_discard(
