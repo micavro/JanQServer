@@ -108,12 +108,16 @@ def choose_route_ev_discard(
         key=lambda tile_id: (_route_keep_score(state, tile_id, route), -tile_id),
     )
     after = state.with_removed_one(discard)
+    reason = f"route_ev_discard:{route.name}"
+    side_suit = _side_route_suit(state.counts, route)
+    if side_suit is not None and route.name in {"suuankou", "daisangen"}:
+        reason = f"{reason}:side_{_suit_name(side_suit)}"
     return DiscardDecision(
         False,
         discard,
         shanten(after),
         winning_tiles(after),
-        f"route_ev_discard:{route.name}",
+        reason,
     )
 
 
@@ -582,6 +586,7 @@ def _route_keep_score(hand: TileSet, tile_id: int, route: RouteEstimate) -> floa
             score += 30.0
         elif count == 1 and tile_id not in HONORS:
             score -= 2.0
+        score += _side_route_keep_bonus(hand, tile_id, route)
     elif name == "suuankou":
         if count >= 3:
             score += 20.0
@@ -589,6 +594,7 @@ def _route_keep_score(hand: TileSet, tile_id: int, route: RouteEstimate) -> floa
             score += 14.0
         elif count == 1 and tile_id not in HONORS:
             score -= 1.5
+        score += _side_route_keep_bonus(hand, tile_id, route)
     elif name == "kokushi":
         if tile_id in TERMINAL_AND_HONOR_IDS:
             score += 18.0 if count == 1 else 4.0
@@ -624,6 +630,84 @@ def _tile_keep_bias(hand: TileSet, tile_id: int) -> float:
     if tile_id in TERMINAL_AND_HONOR_IDS:
         bias += 0.5
     return bias
+
+
+def _side_route_keep_bonus(hand: TileSet, tile_id: int, route: RouteEstimate) -> float:
+    side_suit = _side_route_suit(hand.counts, route)
+    if side_suit is None:
+        return 0.0
+
+    count = hand.counts[tile_id]
+    if tile_id in side_suit:
+        bonus = 4.0
+        if tile_id in route.targets:
+            bonus += 4.0
+        if count == 1:
+            bonus += 2.0
+        elif count >= 2:
+            bonus += 3.0
+        return bonus
+
+    if tile_id in HONORS:
+        bonus = 2.0
+        if count >= 2:
+            bonus += 4.0
+        elif count == 1:
+            bonus += 1.0
+        return bonus
+
+    penalty = -7.0 if count == 1 else -3.0
+    if tile_id in TERMINAL_AND_HONOR_IDS:
+        penalty -= 1.0
+    return penalty
+
+
+def _side_route_suit(
+    counts: tuple[int, ...],
+    route: RouteEstimate,
+) -> frozenset[int] | None:
+    target_suit = _route_target_suit(route)
+    if target_suit is not None:
+        return target_suit
+    return _best_honitsu_fallback_suit(counts)
+
+
+def _route_target_suit(route: RouteEstimate) -> frozenset[int] | None:
+    scored = [
+        (sum(1 for tile_id in route.targets if tile_id in suit), suit)
+        for suit in SUITS
+    ]
+    hits, suit = max(scored, key=lambda item: item[0])
+    return suit if hits >= 2 else None
+
+
+def _best_honitsu_fallback_suit(counts: tuple[int, ...]) -> frozenset[int] | None:
+    total = sum(counts)
+    scored = []
+    for suit in SUITS:
+        allowed = suit | HONORS
+        allowed_count = sum(counts[tile_id] for tile_id in allowed)
+        suit_count = sum(counts[tile_id] for tile_id in suit)
+        pairish = sum(1 for tile_id in allowed if counts[tile_id] >= 2)
+        triplets = sum(1 for tile_id in allowed if counts[tile_id] >= 3)
+        off_count = total - allowed_count
+        score = (
+            allowed_count * 1.5
+            + suit_count * 0.6
+            + pairish * 1.8
+            + triplets * 2.0
+            - off_count * 1.7
+        )
+        scored.append((score, allowed_count, suit_count, suit))
+
+    scored.sort(reverse=True, key=lambda item: item[0])
+    best_score, best_allowed, best_suit_count, best_suit = scored[0]
+    second_score = scored[1][0]
+    if best_allowed >= 8:
+        return best_suit
+    if best_suit_count >= 6 and best_score - second_score >= 2.0:
+        return best_suit
+    return None
 
 
 def _route_suit(name: str) -> frozenset[int]:
