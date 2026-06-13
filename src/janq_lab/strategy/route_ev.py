@@ -18,6 +18,7 @@ from janq_lab.model.hand import (
     TERMINAL_AND_HONOR_IDS,
     TileSet,
     discard_options,
+    improving_tiles,
     is_complete_hand,
     shanten,
     tile_set,
@@ -25,7 +26,7 @@ from janq_lab.model.hand import (
 )
 from janq_lab.model.scoring import GREEN, HONORS, PIN, SOU, JanqScore, score_hand
 from janq_lab.strategy.greedy import AreaDecision, DiscardDecision, choose_area_for_targets
-from janq_lab.strategy.public import choose_public_area, choose_public_discard
+from janq_lab.strategy.public import choose_public_area
 from janq_lab.tiles import TILE_COUNT
 
 
@@ -61,6 +62,15 @@ class TenpaiDiscardEstimate:
     win_probability: float
     value: float
     declare_riichi: bool
+
+
+@dataclass(frozen=True)
+class NextAreaEstimate:
+    area: int
+    targets: tuple[int, ...]
+    progress_probability: float
+    protection_probability: float
+    score: float
 
 
 def choose_route_ev_area(
@@ -100,26 +110,38 @@ def choose_route_ev_area(
 
     active_route = _active_route(state.counts, balls, table.areas)
     if active_route is None:
+        targets = improving_tiles(state)
+        if targets:
+            return _area_decision_from_estimate(
+                table,
+                _next_area_estimate(state.counts, targets, table.areas),
+                "normal_next_area",
+            )
         return choose_public_area(state, table)
     if active_route.name.startswith("honitsu_"):
+        targets = _honitsu_progress_targets(state, active_route.name)
+        if targets:
+            return _area_decision_from_estimate(
+                table,
+                _next_area_estimate(state.counts, targets, table.areas),
+                f"{active_route.name}_next_area",
+            )
         return choose_public_area(state, table)
-    protected = tuple(tile_id for tile_id, count in enumerate(state.counts) if count == 3)
-
-    scored = []
-    for area in range(1, AREA_COUNT + 1):
-        progress_p = _conditioned_area_probability(state.counts, active_route.targets, area, table.areas)
-        win_p = _conditioned_area_probability(state.counts, winners, area, table.areas)
-        protect_p = _conditioned_area_probability(state.counts, protected, area, table.areas)
-        score = progress_p + win_p * 0.35 + protect_p * 0.25
-        scored.append((score, progress_p, win_p, protect_p, area))
-    value, progress_p, win_p, protect_p, area = max(scored)
-    return AreaDecision(
-        area=area,
-        target_tiles=active_route.targets,
-        target_weight=sum(table.tile_weight(area, tile_id) for tile_id in active_route.targets),
-        reason=(
-            f"yakuman_route:{active_route.name}:"
-            f"progress={progress_p:.3f}:win={win_p:.3f}:protect={protect_p:.3f}:v={value:.3f}"
+    estimate = _next_area_estimate(
+        state.counts,
+        active_route.targets,
+        table.areas,
+        winners=winners,
+    )
+    return _area_decision_from_estimate(
+        table,
+        estimate,
+        f"yakuman_route:{active_route.name}",
+        win_probability=_conditioned_area_probability(
+            state.counts,
+            winners,
+            estimate.area,
+            table.areas,
         ),
     )
 
@@ -197,16 +219,41 @@ def choose_route_ev_discard(
         )
 
     if route is None:
-        return choose_public_discard(state)
+        discard, next_area = _normal_lookahead_discard(state, balls, areas)
+        after = state.with_removed_one(discard)
+        return DiscardDecision(
+            False,
+            discard,
+            shanten(after),
+            winning_tiles(after),
+            (
+                "route_ev_discard:normal_next_area"
+                f":area={next_area.area}:p={next_area.progress_probability:.3f}"
+                f":protect={next_area.protection_probability:.3f}"
+            ),
+        )
     if route.name.startswith("honitsu_"):
-        return choose_public_discard(state)
+        discard, next_area = _honitsu_lookahead_discard(state, balls, route, areas)
+        after = state.with_removed_one(discard)
+        return DiscardDecision(
+            False,
+            discard,
+            shanten(after),
+            winning_tiles(after),
+            (
+                f"route_ev_discard:{route.name}:next_area={next_area.area}"
+                f":p={next_area.progress_probability:.3f}"
+                f":protect={next_area.protection_probability:.3f}"
+            ),
+        )
 
-    discard = min(
-        discard_options(state),
-        key=lambda tile_id: (_route_keep_score(state, tile_id, route), -tile_id),
-    )
+    discard, next_area = _yakuman_lookahead_discard(state, balls, route, areas)
     after = state.with_removed_one(discard)
-    reason = f"route_ev_discard:{route.name}"
+    reason = (
+        f"route_ev_discard:{route.name}:next_area={next_area.area}"
+        f":p={next_area.progress_probability:.3f}"
+        f":protect={next_area.protection_probability:.3f}"
+    )
     side_suit = _side_route_suit(state.counts, route)
     if side_suit is not None and route.name in {"suuankou", "daisangen"}:
         reason = f"{reason}:side_{_suit_name(side_suit)}"
@@ -223,6 +270,54 @@ choose_route_ev_area.uses_context = True  # type: ignore[attr-defined]
 choose_route_ev_area.uses_full_context = True  # type: ignore[attr-defined]
 choose_route_ev_discard.uses_context = True  # type: ignore[attr-defined]
 choose_route_ev_discard.uses_full_context = True  # type: ignore[attr-defined]
+
+
+def _area_decision_from_estimate(
+    table: NyukyuTable,
+    estimate: NextAreaEstimate,
+    reason: str,
+    *,
+    win_probability: float = 0.0,
+) -> AreaDecision:
+    return AreaDecision(
+        area=estimate.area,
+        target_tiles=estimate.targets,
+        target_weight=sum(
+            table.tile_weight(estimate.area, tile_id)
+            for tile_id in estimate.targets
+        ),
+        reason=(
+            f"{reason}:progress={estimate.progress_probability:.3f}"
+            f":win={win_probability:.3f}"
+            f":protect={estimate.protection_probability:.3f}"
+            f":v={estimate.score:.3f}"
+        ),
+    )
+
+
+def _next_area_estimate(
+    counts: tuple[int, ...],
+    targets: tuple[int, ...],
+    areas: tuple[tuple[int, ...], ...],
+    *,
+    winners: tuple[int, ...] = (),
+) -> NextAreaEstimate:
+    protected = tuple(tile_id for tile_id, count in enumerate(counts) if count == 3)
+    scored = []
+    for area in range(1, AREA_COUNT + 1):
+        progress_p = _conditioned_area_probability(counts, targets, area, areas)
+        win_p = _conditioned_area_probability(counts, winners, area, areas)
+        protect_p = _conditioned_area_probability(counts, protected, area, areas)
+        score = progress_p + win_p * 0.35 + protect_p * 0.25
+        scored.append((score, progress_p, protect_p, -area, area))
+    score, progress_p, protect_p, _, area = max(scored)
+    return NextAreaEstimate(
+        area=area,
+        targets=targets,
+        progress_probability=progress_p,
+        protection_probability=protect_p,
+        score=score,
+    )
 
 
 def _area_expectation(
@@ -656,6 +751,183 @@ def _conditioned_area_probability(
         if tile_id in target_set and counts[tile_id] < 4
     )
     return hit / valid_total
+
+
+def _yakuman_lookahead_discard(
+    hand: TileSet,
+    balls: int,
+    route: RouteEstimate,
+    areas: tuple[tuple[int, ...], ...],
+) -> tuple[int, NextAreaEstimate]:
+    route_candidates = []
+    for tile_id in discard_options(hand):
+        after = hand.with_removed_one(tile_id)
+        post_route = _route_estimate_by_name(after.counts, balls, areas, route.name)
+        if post_route is None:
+            continue
+        next_area = _next_area_estimate(after.counts, post_route.targets, areas)
+        projected_probability = _binomial_tail(
+            balls,
+            post_route.missing,
+            next_area.progress_probability,
+        )
+        route_candidates.append(
+            (
+                int(post_route.missing <= balls),
+                -post_route.missing,
+                projected_probability,
+                tile_id,
+                after,
+                post_route,
+                next_area,
+            )
+        )
+    if not route_candidates:
+        discard = min(
+            discard_options(hand),
+            key=lambda tile_id: (_route_keep_score(hand, tile_id, route), -tile_id),
+        )
+        after = hand.with_removed_one(discard)
+        return discard, _next_area_estimate(after.counts, route.targets, areas)
+
+    best_feasible = max(candidate[0] for candidate in route_candidates)
+    feasible = [candidate for candidate in route_candidates if candidate[0] == best_feasible]
+    best_missing = max(candidate[1] for candidate in feasible)
+    shortest = [candidate for candidate in feasible if candidate[1] == best_missing]
+    best_probability = max(candidate[2] for candidate in shortest)
+    finalists = [
+        candidate
+        for candidate in shortest
+        if abs(candidate[2] - best_probability) < 1e-12
+    ]
+
+    candidates = []
+    for _, _, _, tile_id, _, _, next_area in finalists:
+        candidates.append(
+            (
+                next_area.score,
+                next_area.progress_probability,
+                next_area.protection_probability,
+                -_route_keep_score(hand, tile_id, route),
+                tile_id,
+                next_area,
+            )
+        )
+    *_, discard, next_area = max(candidates)
+    return discard, next_area
+
+
+def _honitsu_lookahead_discard(
+    hand: TileSet,
+    balls: int,
+    route: RouteEstimate,
+    areas: tuple[tuple[int, ...], ...],
+) -> tuple[int, NextAreaEstimate]:
+    route_candidates = []
+    for tile_id in discard_options(hand):
+        after = hand.with_removed_one(tile_id)
+        post_route = _route_estimate_by_name(after.counts, balls, areas, route.name)
+        if post_route is None:
+            continue
+        route_candidates.append(
+            (
+                -post_route.missing,
+                -shanten(after),
+                tile_id,
+                after,
+                post_route,
+            )
+        )
+    if not route_candidates:
+        return _normal_lookahead_discard(hand, balls, areas)
+
+    best_missing = max(candidate[0] for candidate in route_candidates)
+    shortest = [candidate for candidate in route_candidates if candidate[0] == best_missing]
+    best_shanten = max(candidate[1] for candidate in shortest)
+    finalists = [candidate for candidate in shortest if candidate[1] == best_shanten]
+
+    candidates = []
+    for _, _, tile_id, after, post_route in finalists:
+        targets = _honitsu_progress_targets(after, route.name)
+        next_area = _next_area_estimate(after.counts, targets, areas)
+        candidates.append(
+            (
+                next_area.score,
+                next_area.progress_probability,
+                post_route.probability,
+                next_area.protection_probability,
+                -_route_keep_score(hand, tile_id, route),
+                tile_id,
+                next_area,
+            )
+        )
+    *_, discard, next_area = max(candidates)
+    return discard, next_area
+
+
+def _normal_lookahead_discard(
+    hand: TileSet,
+    balls: int,
+    areas: tuple[tuple[int, ...], ...],
+) -> tuple[int, NextAreaEstimate]:
+    del balls
+    shanten_candidates = []
+    for tile_id in discard_options(hand):
+        after = hand.with_removed_one(tile_id)
+        shanten_candidates.append((-shanten(after), tile_id, after))
+
+    best_shanten = max(candidate[0] for candidate in shanten_candidates)
+    finalists = [
+        candidate
+        for candidate in shanten_candidates
+        if candidate[0] == best_shanten
+    ]
+
+    candidates = []
+    for _, tile_id, after in finalists:
+        targets = improving_tiles(after)
+        next_area = _next_area_estimate(after.counts, targets, areas)
+        candidates.append(
+            (
+                next_area.score,
+                next_area.progress_probability,
+                next_area.protection_probability,
+                len(targets),
+                -_tile_keep_bias(hand, tile_id),
+                tile_id,
+                next_area,
+            )
+        )
+    *_, discard, next_area = max(candidates)
+    return discard, next_area
+
+
+def _route_estimate_by_name(
+    counts: tuple[int, ...],
+    balls: int,
+    areas: tuple[tuple[int, ...], ...],
+    name: str,
+) -> RouteEstimate | None:
+    return next(
+        (route for route in _route_estimates(counts, balls, areas) if route.name == name),
+        None,
+    )
+
+
+def _honitsu_progress_targets(hand: TileSet, route_name: str) -> tuple[int, ...]:
+    allowed = _route_suit(route_name) | HONORS
+    efficient = tuple(
+        tile_id
+        for tile_id in improving_tiles(hand)
+        if tile_id in allowed and hand.counts[tile_id] < 4
+    )
+    if efficient:
+        return efficient
+    return tuple(
+        tile_id
+        for tile_id in sorted(allowed)
+        if hand.counts[tile_id] < 4
+    )
 
 
 def _yakuman_tenpai_discard(

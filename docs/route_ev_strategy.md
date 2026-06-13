@@ -16,6 +16,13 @@ The strategy treats JanQ as a route-selection problem:
 5. Area decisions include fourth-copy protection: a tile already held as three
    copies is not just dead, because drawing it refunds one ball.
 
+Discard decisions also look one shot ahead. For every candidate discard, the
+strategy rebuilds the 13-tile hand, predicts the next selected area, and compares
+the effective progress and protection probability in that area. This applies to
+yakuman routes, honitsu routes, and ordinary hand efficiency, so an apparently
+isolated tile can be kept when it makes the next area's distribution materially
+better.
+
 ## Route gates
 
 The prototype considers:
