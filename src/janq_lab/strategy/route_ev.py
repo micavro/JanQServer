@@ -103,6 +103,23 @@ def choose_route_ev_discard(
         return choose_public_discard(state)
     if route.name.startswith("honitsu_"):
         return choose_public_discard(state)
+
+    tenpai_discard = _route_tenpai_discard(state, route, _default_areas())
+    if tenpai_discard is not None:
+        discard, accepts = tenpai_discard
+        after = state.with_removed_one(discard)
+        reason = f"route_ev_discard:{route.name}:yakuman_tenpai"
+        side_suit = _side_route_suit(after.counts, route)
+        if side_suit is not None and route.name in {"suuankou", "daisangen"}:
+            reason = f"{reason}:side_{_suit_name(side_suit)}"
+        return DiscardDecision(
+            False,
+            discard,
+            shanten(after),
+            accepts,
+            reason,
+        )
+
     discard = min(
         discard_options(state),
         key=lambda tile_id: (_route_keep_score(state, tile_id, route), -tile_id),
@@ -364,6 +381,11 @@ def _suuankou_estimate(
     balls: int,
     areas: tuple[tuple[int, ...], ...],
 ) -> RouteEstimate | None:
+    waits = _route_waits(counts, "suuankou")
+    if waits:
+        probability = _route_probability(counts, waits, 1, balls, areas)
+        return RouteEstimate("suuankou", SUUANKOU_ROUTE_VALUE, 1, waits, probability)
+
     candidates = [tile_id for tile_id, count in enumerate(counts) if count]
     if len(candidates) < 5:
         candidates.extend(tile_id for tile_id in range(TILE_COUNT) if tile_id not in candidates)
@@ -541,6 +563,65 @@ def _conditioned_area_probability(
         if tile_id in target_set and counts[tile_id] < 4
     )
     return hit / valid_total
+
+
+def _route_tenpai_discard(
+    hand: TileSet,
+    route: RouteEstimate,
+    areas: tuple[tuple[int, ...], ...],
+) -> tuple[int, tuple[int, ...]] | None:
+    candidates = []
+    for tile_id in discard_options(hand):
+        after = hand.with_removed_one(tile_id)
+        waits = _route_waits(after.counts, route.name)
+        if not waits:
+            continue
+        win_p = _best_area_probability(after.counts, waits, areas)
+        protected = tuple(i for i, count in enumerate(after.counts) if count == 3)
+        protect_p = _best_area_probability(after.counts, protected, areas) if protected else 0.0
+        fourth_relief = int(hand.counts[tile_id] >= 4)
+        keep_score = _route_keep_score(hand, tile_id, route)
+        candidates.append(
+            (
+                win_p,
+                len(waits),
+                protect_p,
+                fourth_relief,
+                -keep_score,
+                -tile_id,
+                tile_id,
+                waits,
+            )
+        )
+    if not candidates:
+        return None
+    *_, discard, waits = max(candidates)
+    return discard, waits
+
+
+def _route_waits(counts: tuple[int, ...], route_name: str) -> tuple[int, ...]:
+    hand = TileSet(counts)
+    waits = []
+    yaku_name = _route_yaku_name(route_name)
+    if yaku_name is None:
+        return ()
+    for tile_id in winning_tiles(hand):
+        score = score_hand(hand.with_added(tile_id))
+        if yaku_name in score.yaku and score.yakuman_count:
+            waits.append(tile_id)
+    return tuple(waits)
+
+
+def _route_yaku_name(route_name: str) -> str | None:
+    if route_name == "suuankou":
+        return "suuankou"
+    if route_name == "daisangen":
+        return "daisangen"
+    if route_name == "kokushi":
+        return "kokushi"
+    if route_name.startswith("chuuren_"):
+        return "chuuren"
+    return None
 
 
 def _best_protection_bonus(counts: tuple[int, ...], areas: tuple[tuple[int, ...], ...]) -> float:
