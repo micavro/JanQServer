@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from janq_lab.analysis.economy_monte_carlo import run_economy_monte_carlo
 from janq_lab.visualization.html_replay import (
     render_replay_html,
     render_replay_set_html,
@@ -50,6 +51,64 @@ class HtmlReplayTests(unittest.TestCase):
         self.assertIn("prob-data", html)
         self.assertIn('data-area="4"', html)
         self.assertIn("区域概率", html)
+
+    def test_bonus_replay_matches_economy_simulation(self):
+        replay_set = simulate_replay_set(
+            seed=91,
+            strategy="public",
+            examples=1,
+            include_bonus=True,
+            max_bonus_hands=20,
+        )
+        summary = run_economy_monte_carlo(
+            sessions=1,
+            seed=91,
+            bet=10,
+            strategy="public",
+            max_bonus_hands=20,
+        )
+        replay = replay_set.replays[0]
+
+        self.assertEqual(summary.total_payout, replay.total_payout)
+        self.assertEqual(("paren", "paren"), tuple(hand.mode for hand in replay.bonus_hands))
+        self.assertTrue(replay.bonus_hands[0].win)
+        self.assertFalse(replay.bonus_hands[1].win)
+        self.assertEqual(15, replay.bonus_hands[0].payout)
+
+    def test_render_html_contains_bonus_chain_and_economy_summary(self):
+        replay_set = simulate_replay_set(
+            seed=91,
+            strategy="public",
+            examples=1,
+            include_bonus=True,
+            max_bonus_hands=20,
+        )
+
+        html = render_replay_set_html(replay_set)
+
+        self.assertIn('class="panel economy-panel"', html)
+        self.assertIn('class="bonus-chain"', html)
+        self.assertIn("普通奖励游戏 #1", html)
+        self.assertIn("完整游戏经济", html)
+        self.assertIn("ROI", html)
+        self.assertIn("RTP", html)
+
+    def test_yakuman_bonus_replay_uses_progressive_payout(self):
+        replay = simulate_replay(
+            seed=1,
+            strategy="route_ev",
+            balls=8,
+            initial_hand=(0, 0, 0, 1, 1, 1, 9, 9, 9, 18, 18, 18, 31),
+            include_bonus=True,
+            max_bonus_hands=10,
+        )
+        wins = [hand for hand in replay.bonus_hands if hand.win]
+
+        self.assertTrue(replay.score.is_yakuman)
+        self.assertEqual(("yakuman",) * 5, tuple(hand.mode for hand in replay.bonus_hands))
+        self.assertEqual([100, 200, 300, 400], [hand.payout for hand in wins])
+        self.assertEqual([1, 2, 3, 4], [hand.cumulative_yakuman_units for hand in wins])
+        self.assertEqual(1100, replay.total_payout)
 
     def test_render_single_replay_keeps_backwards_compatible_api(self):
         replay = simulate_replay(seed=3, strategy="route_ev", max_turns=2)

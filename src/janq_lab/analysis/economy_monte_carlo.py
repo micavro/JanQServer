@@ -397,8 +397,8 @@ def simulate_session(
             if agari_count >= 8:
                 enter_yakuman = True
                 break
-            number = _choose_paren_number(previous_score, special_records, rng, mode=paren_table_mode)
-            record = _choose_record(special_records.paren_tables[number].records, rng)
+            number = choose_paren_number(previous_score, special_records, rng, mode=paren_table_mode)
+            record = choose_enabled_record(special_records.paren_tables[number].records, rng)
             paren = _simulate_scored_hand(
                 tile_set(record.tiles),
                 paren_table,
@@ -426,7 +426,7 @@ def simulate_session(
     if enter_yakuman:
         cumulative_yakuman_units = 0
         for _ in range(max_bonus_hands):
-            record = _choose_record(special_records.yakuman_records, rng)
+            record = choose_enabled_record(special_records.yakuman_records, rng)
             yakuman = _simulate_scored_hand(
                 tile_set(record.tiles),
                 yakuman_table,
@@ -566,14 +566,23 @@ def _random_dora(rng: random.Random) -> int:
     return rng.randrange(34)
 
 
-def _choose_record(records: tuple[SpecialHandRecord, ...], rng: random.Random) -> SpecialHandRecord:
+def choose_enabled_record(
+    records: tuple[SpecialHandRecord, ...],
+    rng: random.Random,
+) -> SpecialHandRecord:
     enabled = [record for record in records if record.enabled]
     if not enabled:
         raise ValueError("no enabled special records")
     return rng.choice(enabled)
 
 
-def _choose_paren_number(score: JanqScore, special_records: Any, rng: random.Random, *, mode: str) -> int:
+def choose_paren_number(
+    score: JanqScore,
+    special_records: Any,
+    rng: random.Random,
+    *,
+    mode: str,
+) -> int:
     if mode == "previous_han":
         return min(12, max(2, score.han))
     if mode == "select_table":

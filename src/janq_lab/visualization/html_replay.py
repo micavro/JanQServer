@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from html import escape
 from pathlib import Path
 import argparse
@@ -19,6 +19,12 @@ from janq_lab.assets.nyukyu import (
     NyukyuTable,
     load_tables,
 )
+from janq_lab.assets.special import SpecialHandRecord, load_special_tables
+from janq_lab.analysis.economy_monte_carlo import (
+    choose_enabled_record,
+    choose_paren_number,
+)
+from janq_lab.model.economy import payout_for_score, yakuman_challenge_payout
 from janq_lab.model.haipai import load_observed_normal_haipai, random_wall_hand
 from janq_lab.model.hand import TileSet, tile_set
 from janq_lab.model.scoring import JanqScore, score_hand
@@ -28,6 +34,7 @@ from janq_lab.strategy.greedy import (
     choose_greedy_area,
     choose_greedy_discard,
 )
+from janq_lab.strategy.bonus import choose_bonus_area, choose_bonus_discard
 from janq_lab.strategy.public import choose_public_area, choose_public_discard
 from janq_lab.strategy.route_ev import choose_route_ev_area, choose_route_ev_discard
 from janq_lab.tiles import TILE_COUNT, TILE_NAMES, tile_name
@@ -75,6 +82,20 @@ class ReplayHand:
     double_riichi: bool = False
     ippatsu_win: bool = False
     source_label: str = "随机起手"
+    mode: str = "normal"
+    mode_index: int = 0
+    payout: int = 0
+    cumulative_payout: int = 0
+    cumulative_yakuman_units: int = 0
+    bonus_hands: tuple["ReplayHand", ...] = ()
+
+    @property
+    def bonus_payout(self) -> int:
+        return sum(hand.payout for hand in self.bonus_hands)
+
+    @property
+    def total_payout(self) -> int:
+        return self.payout + self.bonus_payout
 
 
 @dataclass(frozen=True)
@@ -85,6 +106,9 @@ class ReplaySet:
     source_label: str
     table_name: str
     observed_hand_count: int = 0
+    bet: int = 10
+    paren_table_mode: str = "previous_han"
+    include_bonus: bool = True
 
 
 @dataclass(frozen=True)
@@ -144,21 +168,35 @@ def simulate_replay(
     max_turns: int = 100,
     source_label: str = "随机起手",
     table: NyukyuTable | None = None,
+    bet: int = 10,
+    include_bonus: bool = True,
+    paren_table_mode: str = "previous_han",
+    max_bonus_hands: int = 100,
+    mode: str = "normal",
+    mode_index: int = 0,
+    _rng: random.Random | None = None,
+    _dora_id: int | None = None,
+    _ura_dora_id: int | None = None,
+    _randomize_dora: bool = True,
 ) -> ReplayHand:
     if balls < 1:
         raise ValueError("balls must be positive")
     if max_turns < 1:
         raise ValueError("max_turns must be positive")
+    if bet < 1:
+        raise ValueError("bet must be positive")
+    if max_bonus_hands < 1:
+        raise ValueError("max_bonus_hands must be positive")
 
-    rng = random.Random(seed)
+    rng = _rng if _rng is not None else random.Random(seed)
     table = table or load_tables()["nyukyu_base_table.bytes"]
     choose_area, choose_discard = _strategy_functions(strategy)
     hand = tile_set(initial_hand) if initial_hand is not None else random_wall_hand(rng)
     if hand.size != 13:
         raise ValueError(f"initial hand must have 13 tiles, got {hand.size}")
     original = hand.to_tiles()
-    dora_id = rng.randrange(34)
-    ura_dora_id = rng.randrange(34)
+    dora_id = rng.randrange(34) if _randomize_dora else _dora_id
+    ura_dora_id = rng.randrange(34) if _randomize_dora else _ura_dora_id
 
     turns: list[ReplayTurn] = []
     current_balls = balls
@@ -236,7 +274,7 @@ def simulate_replay(
                 double_reach=riichi_turn == 1,
                 ippatsu=ippatsu_chance,
             )
-            return ReplayHand(
+            replay = ReplayHand(
                 seed=seed,
                 strategy=strategy,
                 initial_hand=original,
@@ -251,7 +289,21 @@ def simulate_replay(
                 double_riichi=riichi_turn == 1,
                 ippatsu_win=ippatsu_chance,
                 source_label=source_label,
+                mode=mode,
+                mode_index=mode_index,
+                payout=payout_for_score(score, bet=bet),
+                cumulative_payout=payout_for_score(score, bet=bet),
             )
+            if include_bonus and mode == "normal":
+                return _attach_bonus_hands(
+                    replay,
+                    rng=rng,
+                    bet=bet,
+                    paren_table_mode=paren_table_mode,
+                    max_bonus_hands=max_bonus_hands,
+                    max_turns=max_turns,
+                )
+            return replay
 
         if discard_decision.discard_tile is None:
             raise RuntimeError("discard decision did not include a tile")
@@ -296,7 +348,136 @@ def simulate_replay(
         double_riichi=riichi_turn == 1,
         ippatsu_win=False,
         source_label=source_label,
+        mode=mode,
+        mode_index=mode_index,
     )
+
+
+def _attach_bonus_hands(
+    normal: ReplayHand,
+    *,
+    rng: random.Random,
+    bet: int,
+    paren_table_mode: str,
+    max_bonus_hands: int,
+    max_turns: int,
+) -> ReplayHand:
+    if normal.score is None:
+        return normal
+
+    tables = load_tables()
+    special = load_special_tables()
+    bonus_hands: list[ReplayHand] = []
+    cumulative_payout = normal.payout
+    enter_yakuman = normal.score.is_yakuman
+    previous_score = normal.score
+
+    if not enter_yakuman:
+        agari_count = 1
+        for bonus_index in range(1, max_bonus_hands + 1):
+            if agari_count >= 8:
+                enter_yakuman = True
+                break
+            number = choose_paren_number(
+                previous_score,
+                special,
+                rng,
+                mode=paren_table_mode,
+            )
+            records = special.paren_tables[number].records
+            record = choose_enabled_record(records, rng)
+            replay = simulate_replay(
+                seed=normal.seed,
+                strategy="bonus",
+                balls=3,
+                initial_hand=record.tiles,
+                max_turns=max_turns,
+                source_label=(
+                    f"普通奖励 #{bonus_index} · paren_{number} "
+                    f"· record {_record_number(records, record)}"
+                ),
+                table=tables["nyukyu_paren_table.bytes"],
+                bet=bet,
+                include_bonus=False,
+                paren_table_mode=paren_table_mode,
+                max_bonus_hands=max_bonus_hands,
+                mode="paren",
+                mode_index=bonus_index,
+                _rng=rng,
+                _dora_id=record.dora_id,
+                _ura_dora_id=None,
+                _randomize_dora=False,
+            )
+            cumulative_payout += replay.payout
+            replay = replace(replay, cumulative_payout=cumulative_payout)
+            bonus_hands.append(replay)
+            if not replay.win or replay.score is None:
+                break
+            agari_count += 1
+            previous_score = replay.score
+            if replay.score.is_yakuman or agari_count >= 8:
+                enter_yakuman = True
+                break
+
+    if enter_yakuman:
+        cumulative_yakuman_units = 0
+        records = special.yakuman_records
+        for bonus_index in range(1, max_bonus_hands + 1):
+            record = choose_enabled_record(records, rng)
+            replay = simulate_replay(
+                seed=normal.seed,
+                strategy="bonus",
+                balls=3,
+                initial_hand=record.tiles,
+                max_turns=max_turns,
+                source_label=(
+                    f"役满奖励 #{bonus_index} · yakuman_table "
+                    f"· record {_record_number(records, record)}"
+                ),
+                table=tables["nyukyu_yakuman_table.bytes"],
+                bet=bet,
+                include_bonus=False,
+                paren_table_mode=paren_table_mode,
+                max_bonus_hands=max_bonus_hands,
+                mode="yakuman",
+                mode_index=bonus_index,
+                _rng=rng,
+                _dora_id=None,
+                _ura_dora_id=None,
+                _randomize_dora=False,
+            )
+            if replay.win and replay.score is not None:
+                cumulative_yakuman_units += max(1, replay.score.yakuman_count)
+                payout = yakuman_challenge_payout(
+                    bet=bet,
+                    cumulative_yakuman_count=cumulative_yakuman_units,
+                )
+                cumulative_payout += payout
+                replay = replace(
+                    replay,
+                    payout=payout,
+                    cumulative_payout=cumulative_payout,
+                    cumulative_yakuman_units=cumulative_yakuman_units,
+                )
+            else:
+                replay = replace(
+                    replay,
+                    payout=0,
+                    cumulative_payout=cumulative_payout,
+                    cumulative_yakuman_units=cumulative_yakuman_units,
+                )
+            bonus_hands.append(replay)
+            if not replay.win:
+                break
+
+    return replace(normal, bonus_hands=tuple(bonus_hands))
+
+
+def _record_number(
+    records: tuple[SpecialHandRecord, ...],
+    selected: SpecialHandRecord,
+) -> int:
+    return records.index(selected) + 1
 
 
 def simulate_replay_set(
@@ -308,6 +489,10 @@ def simulate_replay_set(
     max_turns: int = 100,
     source: str = "random",
     events_path: str | Path | None = None,
+    bet: int = 10,
+    include_bonus: bool = True,
+    paren_table_mode: str = "previous_han",
+    max_bonus_hands: int = 100,
 ) -> ReplaySet:
     if examples < 1:
         raise ValueError("examples must be positive")
@@ -350,6 +535,10 @@ def simulate_replay_set(
                 max_turns=max_turns,
                 source_label=hand_label,
                 table=table,
+                bet=bet,
+                include_bonus=include_bonus,
+                paren_table_mode=paren_table_mode,
+                max_bonus_hands=max_bonus_hands,
             )
         )
 
@@ -360,6 +549,9 @@ def simulate_replay_set(
         source_label=source_label,
         table_name=table.name,
         observed_hand_count=len(observed_hands),
+        bet=bet,
+        paren_table_mode=paren_table_mode,
+        include_bonus=include_bonus,
     )
 
 
@@ -389,7 +581,8 @@ def render_replay_set_html(
     resource_dir: str | Path | None = None,
     output_path: str | Path | None = None,
 ) -> str:
-    table = load_tables()[replay_set.table_name]
+    tables = load_tables()
+    table = tables[replay_set.table_name]
     assets = discover_tile_image_assets(resource_dir=resource_dir, output_path=output_path)
     title = f"JanQ replay dashboard seed {replay_set.seed}"
     return "\n".join(
@@ -405,12 +598,13 @@ def render_replay_set_html(
             "<body>",
             '<main class="shell">',
             _render_header(replay_set, assets),
+            _render_economy_summary(replay_set),
             _render_strategy_note(replay_set.strategy),
             '<section class="workspace">',
             _render_example_list(replay_set),
             '<div class="replay-stage">',
             "".join(
-                _render_replay_card(replay, index, table)
+                _render_replay_card(replay, index, tables, bet=replay_set.bet)
                 for index, replay in enumerate(replay_set.replays)
             ),
             "</div>",
@@ -551,6 +745,12 @@ def _render_header(replay_set: ReplaySet, assets: TileImageAssets) -> str:
         for replay in replay_set.replays
         if replay.score is not None and replay.score.yakuman_count
     )
+    bonus_wins = sum(
+        1
+        for replay in replay_set.replays
+        for bonus in replay.bonus_hands
+        if bonus.win
+    )
     return f"""
 <section class="hero">
   <div>
@@ -563,9 +763,86 @@ def _render_header(replay_set: ReplaySet, assets: TileImageAssets) -> str:
     <span><b>{len(replay_set.replays)}</b> 起手</span>
     <span><b>{wins}</b> 和牌</span>
     <span><b>{yakuman}</b> 役满</span>
+    <span><b>{bonus_wins}</b> 奖励和牌</span>
   </div>
 </section>
 """
+
+
+def _render_economy_summary(replay_set: ReplaySet) -> str:
+    stats = _economy_stats(replay_set)
+    net_class = "positive" if stats["net"] >= 0 else "negative"
+    return f"""
+<section class="panel economy-panel">
+  <div class="economy-head">
+    <div>
+      <p class="eyebrow">完整游戏经济</p>
+      <h2>总返还 {stats["total_payout"]} / 净收益 <span class="{net_class}">{_signed(stats["net"])}</span></h2>
+      <p>投入 {stats["total_bet"]} · RTP {_percent(stats["rtp"])} · ROI {_signed_percent(stats["roi"])}</p>
+    </div>
+    <div class="economy-counts">
+      <span>普通和牌 <b>{stats["normal_wins"]}</b></span>
+      <span>普通奖励 <b>{stats["paren_wins"]}</b></span>
+      <span>役满奖励 <b>{stats["yakuman_wins"]}</b></span>
+    </div>
+  </div>
+  <div class="payout-breakdown">
+    <div><span>普通非役满</span><b>{stats["normal_non_yakuman_payout"]}</b></div>
+    <div><span>普通役满</span><b>{stats["normal_yakuman_payout"]}</b></div>
+    <div><span>普通奖励游戏</span><b>{stats["paren_payout"]}</b></div>
+    <div><span>役满奖励游戏</span><b>{stats["yakuman_payout"]}</b></div>
+  </div>
+</section>
+"""
+
+
+def _economy_stats(replay_set: ReplaySet) -> dict[str, int | float]:
+    normal_non_yakuman_payout = sum(
+        replay.payout
+        for replay in replay_set.replays
+        if replay.score is not None and not replay.score.is_yakuman
+    )
+    normal_yakuman_payout = sum(
+        replay.payout
+        for replay in replay_set.replays
+        if replay.score is not None and replay.score.is_yakuman
+    )
+    paren_hands = [
+        bonus
+        for replay in replay_set.replays
+        for bonus in replay.bonus_hands
+        if bonus.mode == "paren"
+    ]
+    yakuman_hands = [
+        bonus
+        for replay in replay_set.replays
+        for bonus in replay.bonus_hands
+        if bonus.mode == "yakuman"
+    ]
+    paren_payout = sum(hand.payout for hand in paren_hands)
+    yakuman_payout = sum(hand.payout for hand in yakuman_hands)
+    total_bet = len(replay_set.replays) * replay_set.bet
+    total_payout = (
+        normal_non_yakuman_payout
+        + normal_yakuman_payout
+        + paren_payout
+        + yakuman_payout
+    )
+    net = total_payout - total_bet
+    return {
+        "total_bet": total_bet,
+        "total_payout": total_payout,
+        "net": net,
+        "rtp": total_payout / total_bet if total_bet else 0.0,
+        "roi": net / total_bet if total_bet else 0.0,
+        "normal_wins": sum(1 for replay in replay_set.replays if replay.win),
+        "paren_wins": sum(1 for hand in paren_hands if hand.win),
+        "yakuman_wins": sum(1 for hand in yakuman_hands if hand.win),
+        "normal_non_yakuman_payout": normal_non_yakuman_payout,
+        "normal_yakuman_payout": normal_yakuman_payout,
+        "paren_payout": paren_payout,
+        "yakuman_payout": yakuman_payout,
+    }
 
 
 def _render_strategy_note(strategy: str) -> str:
@@ -595,6 +872,7 @@ def _render_example_list(replay_set: ReplaySet) -> str:
     buttons = []
     for index, replay in enumerate(replay_set.replays):
         result = _result_text(replay)
+        net = replay.total_payout - replay_set.bet
         active = " active" if index == 0 else ""
         buttons.append(
             f"""
@@ -604,6 +882,7 @@ def _render_example_list(replay_set: ReplaySet) -> str:
     <span class="result-pill {('win' if replay.win else 'lose')}">{escape(result)}</span>
   </span>
   <span class="example-hand">{''.join(_mini_tile_html(tile_id) for tile_id in replay.initial_hand)}</span>
+  <span class="example-meta">返还 {replay.total_payout} · 净 {_signed(net)} · 奖励局 {len(replay.bonus_hands)}</span>
   <span class="example-meta">seed={replay.seed} · {len(replay.turns)}球 · {escape(replay.source_label)}</span>
 </button>
 """
@@ -622,7 +901,13 @@ def _render_example_list(replay_set: ReplaySet) -> str:
 """
 
 
-def _render_replay_card(replay: ReplayHand, index: int, table: NyukyuTable) -> str:
+def _render_replay_card(
+    replay: ReplayHand,
+    index: int,
+    tables: dict[str, NyukyuTable],
+    *,
+    bet: int,
+) -> str:
     active = " active" if index == 0 else ""
     riichi_meta = "无立直" if not replay.riichi else (
         f"{'双立直' if replay.double_riichi else '立直'} 第{replay.riichi_turn}球"
@@ -639,9 +924,100 @@ def _render_replay_card(replay: ReplayHand, index: int, table: NyukyuTable) -> s
     <div class="score-box">{escape(_score_text(replay.score))}</div>
   </div>
   {_render_hand_panel("起手", replay.initial_hand)}
-  {_render_turns(replay, table)}
+  {_render_turns(replay, tables["nyukyu_base_table.bytes"])}
   {_render_hand_panel("回合后", replay.final_hand, aside=_score_text(replay.score))}
+  {_render_session_economy(replay, bet=bet)}
+  {_render_bonus_chain(replay, tables)}
 </section>
+"""
+
+
+def _render_session_economy(replay: ReplayHand, *, bet: int) -> str:
+    paren_hands = tuple(hand for hand in replay.bonus_hands if hand.mode == "paren")
+    yakuman_hands = tuple(hand for hand in replay.bonus_hands if hand.mode == "yakuman")
+    paren_payout = sum(hand.payout for hand in paren_hands)
+    yakuman_payout = sum(hand.payout for hand in yakuman_hands)
+    net = replay.total_payout - bet
+    net_class = "positive" if net >= 0 else "negative"
+    return f"""
+<section class="session-economy">
+  <div class="session-economy-head">
+    <div>
+      <p class="eyebrow">本局完整收益</p>
+      <h3>返还 {replay.total_payout} · <span class="{net_class}">净 {_signed(net)}</span></h3>
+    </div>
+    <span class="session-bet">投入 {bet}</span>
+  </div>
+  <div class="session-payout-grid">
+    <div><span>普通游戏</span><b>{replay.payout}</b></div>
+    <div><span>普通奖励</span><b>{paren_payout}</b><small>{sum(hand.win for hand in paren_hands)} 胜</small></div>
+    <div><span>役满奖励</span><b>{yakuman_payout}</b><small>{sum(hand.win for hand in yakuman_hands)} 胜</small></div>
+    <div><span>奖励总局数</span><b>{len(replay.bonus_hands)}</b><small>含结束失败局</small></div>
+  </div>
+</section>
+"""
+
+
+def _render_bonus_chain(
+    replay: ReplayHand,
+    tables: dict[str, NyukyuTable],
+) -> str:
+    if not replay.bonus_hands:
+        if replay.win:
+            return '<section class="bonus-empty">本局未生成奖励游戏记录。</section>'
+        return '<section class="bonus-empty">普通游戏未和牌，不进入奖励游戏。</section>'
+
+    return f"""
+<section class="bonus-chain">
+  <div class="bonus-chain-head">
+    <div>
+      <p class="eyebrow">奖励游戏进程</p>
+      <h2>普通游戏之后继续模拟，直到奖励链结束</h2>
+    </div>
+    <span>{len(replay.bonus_hands)} 局</span>
+  </div>
+  {''.join(_render_bonus_hand(hand, tables) for hand in replay.bonus_hands)}
+</section>
+"""
+
+
+def _render_bonus_hand(
+    replay: ReplayHand,
+    tables: dict[str, NyukyuTable],
+) -> str:
+    is_yakuman = replay.mode == "yakuman"
+    mode_label = "役满奖励游戏" if is_yakuman else "普通奖励游戏"
+    table = tables[
+        "nyukyu_yakuman_table.bytes"
+        if is_yakuman
+        else "nyukyu_paren_table.bytes"
+    ]
+    status = "成功和牌" if replay.win else "失败，奖励链结束"
+    status_class = "win" if replay.win else "lose"
+    units = (
+        f'<span>累计役满单位 <b>{replay.cumulative_yakuman_units}</b></span>'
+        if is_yakuman
+        else ""
+    )
+    return f"""
+<article class="bonus-hand {escape(replay.mode)}">
+  <div class="bonus-hand-head">
+    <div>
+      <p class="eyebrow">{escape(mode_label)} #{replay.mode_index}</p>
+      <h3>{escape(status)}</h3>
+      <p>{escape(replay.source_label)} · Dora: {_tile_label(replay.dora_id)}</p>
+    </div>
+    <div class="bonus-result">
+      <span class="result-pill {status_class}">{escape(_score_text(replay.score))}</span>
+      <b>本局 +{replay.payout}</b>
+      <small>累计返还 {replay.cumulative_payout}</small>
+      {units}
+    </div>
+  </div>
+  {_render_hand_panel("奖励起手", replay.initial_hand)}
+  {_render_turns(replay, table)}
+  {_render_hand_panel("奖励结果", replay.final_hand, aside=_score_text(replay.score))}
+</article>
 """
 
 
@@ -848,6 +1224,8 @@ def _json_script(value: object) -> str:
 
 
 def _strategy_functions(strategy: str) -> tuple[ChooseArea, ChooseDiscard]:
+    if strategy == "bonus":
+        return choose_bonus_area, choose_bonus_discard
     if strategy == "greedy":
         return choose_greedy_area, choose_greedy_discard
     if strategy == "public":
@@ -920,6 +1298,19 @@ def _score_text(score: JanqScore | None) -> str:
     return f"{score.han}番 · {yaku}"
 
 
+def _signed(value: int) -> str:
+    return f"+{value}" if value >= 0 else str(value)
+
+
+def _percent(value: int | float) -> str:
+    return f"{float(value) * 100:.2f}%"
+
+
+def _signed_percent(value: int | float) -> str:
+    percent = float(value) * 100
+    return f"+{percent:.2f}%" if percent >= 0 else f"{percent:.2f}%"
+
+
 def _tile_html(tile_id: int | None, *, discarded: bool = False) -> str:
     if tile_id is None:
         return '<span class="tile empty">-</span>'
@@ -981,6 +1372,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--examples", type=int, default=100, help="Number of starting hands to show")
     parser.add_argument("--balls", type=int, default=8)
     parser.add_argument("--max-turns", type=int, default=100)
+    parser.add_argument("--bet", type=int, default=10)
+    parser.add_argument(
+        "--paren-table-mode",
+        choices=("previous_han", "select_table"),
+        default="previous_han",
+    )
+    parser.add_argument("--max-bonus-hands", type=int, default=100)
+    parser.add_argument(
+        "--no-bonus",
+        action="store_true",
+        help="Render normal games only.",
+    )
     parser.add_argument(
         "--source",
         choices=("random", "observed", "auto"),
@@ -1007,6 +1410,10 @@ def main(argv: list[str] | None = None) -> None:
         max_turns=args.max_turns,
         source=args.source,
         events_path=args.events_path,
+        bet=args.bet,
+        include_bonus=not args.no_bonus,
+        paren_table_mode=args.paren_table_mode,
+        max_bonus_hands=args.max_bonus_hands,
     )
     output = Path(args.output) if args.output else _default_output(args.seed, args.strategy, args.examples)
     path = write_replay_set_html(replay_set, output, resource_dir=args.resource_dir)
@@ -1109,9 +1516,9 @@ h1 {
 
 .stat-strip {
   display: grid;
-  grid-template-columns: repeat(3, minmax(84px, 1fr));
+  grid-template-columns: repeat(4, minmax(84px, 1fr));
   gap: 8px;
-  min-width: 300px;
+  min-width: 410px;
 }
 
 .stat-strip span {
@@ -1137,6 +1544,95 @@ h1 {
   margin-bottom: 0;
   color: #3e4a48;
   line-height: 1.7;
+}
+
+.economy-panel {
+  border-left: 4px solid var(--teal);
+}
+
+.economy-head,
+.session-economy-head,
+.bonus-chain-head,
+.bonus-hand-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-start;
+}
+
+.economy-head h2,
+.session-economy-head h3,
+.bonus-chain-head h2,
+.bonus-hand-head h3 {
+  margin-bottom: 5px;
+}
+
+.economy-head p,
+.bonus-hand-head p {
+  margin-bottom: 0;
+  color: var(--muted);
+}
+
+.economy-counts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.economy-counts span,
+.session-bet {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f7f9f9;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.economy-counts b {
+  margin-left: 5px;
+  color: var(--ink);
+}
+
+.payout-breakdown,
+.session-payout-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.payout-breakdown div,
+.session-payout-grid div {
+  min-width: 0;
+  padding: 11px;
+  border-top: 3px solid #a9c8c2;
+  background: #f7f9f9;
+}
+
+.payout-breakdown span,
+.session-payout-grid span,
+.session-payout-grid small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.payout-breakdown b,
+.session-payout-grid b {
+  display: block;
+  margin-top: 4px;
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+}
+
+.positive {
+  color: var(--green);
+}
+
+.negative {
+  color: var(--red);
 }
 
 .workspace {
@@ -1278,6 +1774,67 @@ h1 {
   text-align: center;
 }
 
+.session-economy {
+  margin-top: 16px;
+  padding: 16px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.bonus-chain {
+  margin-top: 22px;
+}
+
+.bonus-chain-head {
+  padding-bottom: 12px;
+  border-bottom: 2px solid var(--ink);
+}
+
+.bonus-chain-head > span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.bonus-hand {
+  padding: 20px 0 8px;
+  border-bottom: 2px solid var(--line);
+}
+
+.bonus-hand.paren {
+  border-left: 4px solid var(--blue);
+  padding-left: 14px;
+}
+
+.bonus-hand.yakuman {
+  border-left: 4px solid var(--red);
+  padding-left: 14px;
+}
+
+.bonus-result {
+  display: grid;
+  justify-items: end;
+  gap: 5px;
+  min-width: 170px;
+}
+
+.bonus-result > b {
+  font-size: 22px;
+  color: var(--teal-dark);
+}
+
+.bonus-result small,
+.bonus-result > span:not(.result-pill) {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.bonus-empty {
+  margin-top: 18px;
+  padding: 15px 0;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+}
+
 .hand-panel {
   margin-top: 14px;
   padding: 14px;
@@ -1372,12 +1929,14 @@ h1 {
   display: grid;
   gap: 14px;
   margin-top: 14px;
+  min-width: 0;
 }
 
 .turn {
   border-radius: 8px;
   padding: 14px;
   box-shadow: none;
+  min-width: 0;
 }
 
 .turn-head {
@@ -1397,6 +1956,7 @@ h1 {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .balls {
@@ -1413,6 +1973,7 @@ h1 {
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 7px;
   margin: 14px 0 12px;
+  min-width: 0;
 }
 
 .area {
@@ -1649,13 +2210,18 @@ h1 {
 @media (max-width: 980px) {
   .hero,
   .replay-head,
-  .turn-head {
+  .turn-head,
+  .economy-head,
+  .session-economy-head,
+  .bonus-chain-head,
+  .bonus-hand-head {
     display: block;
   }
 
   .stat-strip {
     margin-top: 16px;
     min-width: 0;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .workspace {
@@ -1675,8 +2241,17 @@ h1 {
   .turn-grid,
   .reason-list,
   .hand-columns,
-  .hand-flow {
+  .hand-flow,
+  .payout-breakdown,
+  .session-payout-grid {
     grid-template-columns: 1fr;
+  }
+
+  .economy-counts,
+  .bonus-result {
+    margin-top: 12px;
+    justify-content: flex-start;
+    justify-items: start;
   }
 }
 """

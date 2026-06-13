@@ -32,6 +32,9 @@ python -m janq_lab.visualization.html_replay --seed 20260613 --strategy route_ev
 python -m janq_lab.visualization.html_replay --seed 20260613 --strategy route_ev --examples 100 --source observed --events-path _runtime\logs\janq_events.jsonl --output _runtime\replays\janq_replay_observed_100.html
 ```
 
+Replay HTML includes the full ordinary/yakuman bonus chain and session ROI/RTP
+summary by default. Use `--no-bonus` for a normal-game-only diagnostic page.
+
 Runtime logs and generated artifacts belong under `_runtime`.
 
 ## Client probe and bridge
