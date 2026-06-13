@@ -9,7 +9,7 @@ New code lives under `src/janq_lab`.
 
 1. Parse the official JanQ table assets from the copied client.
 2. Build an offline simulator.
-3. Add a passive client probe.
+3. Add a client probe and background action bridge.
 4. Compare policies with real minimum-bet captures.
 
 ## Useful commands
@@ -27,23 +27,24 @@ python -m janq_lab.analysis.haipai_distribution _runtime\logs\janq_events.jsonl 
 python -m janq_lab.analysis.shot_distribution _runtime\logs\janq_events.jsonl
 python -m janq_lab.analysis.observed_ev _runtime\logs\janq_events.jsonl --currency mjchip
 python -m janq_lab.automation.bot --config automation.example.yaml --mode dry_run
+.\start_janq_bot.ps1 -MaxHands 20
 python -m janq_lab.visualization.html_replay --seed 20260613 --strategy route_ev --examples 100 --output _runtime\replays\janq_replay_route_ev_100.html
 python -m janq_lab.visualization.html_replay --seed 20260613 --strategy route_ev --examples 100 --source observed --events-path _runtime\logs\janq_events.jsonl --output _runtime\replays\janq_replay_observed_100.html
 ```
 
 Runtime logs and generated artifacts belong under `_runtime`.
 
-## Passive probe
+## Client probe and bridge
 
 The copied client has BepInEx installed under `sega_net_MJ\MJ`.
-Build the passive logger with:
+Build the probe and background action bridge with:
 
 ```powershell
 dotnet build plugin\JanqProbe\JanqProbe.csproj -c Release
 ```
 
 See `docs/probe_usage.md` for event names and log paths.
-See `docs/automation_usage.md` for dry-run and UI-live automation.
+See `docs/automation_usage.md` for dry-run, plugin-live, and cold-start usage.
 
 ## Interpretation
 

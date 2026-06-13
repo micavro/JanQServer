@@ -10,29 +10,31 @@ using SphingoAPI;
 
 namespace JanqProbe;
 
-[BepInPlugin("janq.lab.probe", "JanQ Probe", "0.1.0")]
+[BepInPlugin("janq.lab.probe", "JanQ Probe", "0.2.0")]
 public sealed class Plugin : BaseUnityPlugin
 {
-    private Harmony? harmony;
-
     private void Awake()
     {
         ProbeLog.Initialize(Logger);
-        harmony = new Harmony("janq.lab.probe");
+        UnityEngine.Application.runInBackground = true;
+        ActionBridge.Initialize(Paths.GameRootPath);
+        var harmony = new Harmony("janq.lab.probe");
         harmony.PatchAll(typeof(Plugin).Assembly);
+        ActionBridgeRunner.Ensure();
         ProbeLog.Write("probe_loaded", new
         {
-            version = "0.1.0",
+            version = "0.2.0",
             gameRoot = Paths.GameRootPath,
-            logPath = ProbeLog.LogPath
+            logPath = ProbeLog.LogPath,
+            bridgeRoot = ActionBridge.RootPath,
+            runInBackground = UnityEngine.Application.runInBackground
         });
         Logger.LogInfo($"JanQ Probe loaded; logging to {ProbeLog.LogPath}");
     }
 
     private void OnDestroy()
     {
-        harmony?.UnpatchSelf();
-        ProbeLog.Write("probe_unloaded", new { });
+        ProbeLog.Write("plugin_host_destroyed", new { bridgeContinues = true });
     }
 }
 

@@ -12,6 +12,9 @@ from typing import Any
 class AutomationConfig:
     mode: str = "dry_run"
     events_path: str = "_runtime/logs/janq_events.jsonl"
+    bridge_dir: str = "_runtime/bridge"
+    bridge_result_timeout_seconds: float = 18.0
+    enter_janq_on_start: bool = False
     session_log_path: str | None = None
     session_dir: str = "_runtime/sessions"
     strategy: str = "route_ev"
@@ -53,8 +56,8 @@ class AutomationConfig:
     dry_run_log_actions: bool = True
 
     def validate(self) -> None:
-        if self.mode not in ("dry_run", "ui_live"):
-            raise ValueError("mode must be dry_run or ui_live")
+        if self.mode not in ("dry_run", "plugin_live", "ui_live"):
+            raise ValueError("mode must be dry_run, plugin_live, or ui_live")
         if self.strategy not in ("public", "greedy", "route_ev"):
             raise ValueError("strategy must be public, greedy, or route_ev")
         if self.max_hands < 1:
@@ -67,6 +70,8 @@ class AutomationConfig:
             raise ValueError("action_delay_min_seconds cannot exceed action_delay_max_seconds")
         if self.confirm_timeout_seconds <= 0:
             raise ValueError("confirm_timeout_seconds must be positive")
+        if self.bridge_result_timeout_seconds <= 0:
+            raise ValueError("bridge_result_timeout_seconds must be positive")
         for area in range(1, 8):
             if self.shot_duration_ms(area) <= 0:
                 raise ValueError(f"shot area {area} duration must be positive")
@@ -131,4 +136,3 @@ def _parse_scalar(value: str) -> Any:
         return float(value)
     except ValueError:
         return value
-

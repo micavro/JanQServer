@@ -79,11 +79,25 @@ class AutomationRunner:
         self.pending: PendingAction | None = None
         self.last_decision_key: tuple[object, ...] | None = None
         self.last_decision_time = 0.0
+        self.start_completed_hands = 0
         self.running = True
 
     def run(self) -> None:
         self.logger.write("bot_session_start", {"config": self.config.__dict__})
         tailer = ProbeTailer(self.config.events_path)
+        if self.config.mode == "plugin_live" and self.config.enter_janq_on_start:
+            startup_action = BotAction("enter_janq")
+            startup_result = self.executor.execute(startup_action, self.rng)
+            self.logger.write("bot_startup_action", startup_result.to_dict())
+            if not startup_result.success:
+                self._pause(f"startup_action_failed:{startup_result.error}")
+        if self.config.mode != "dry_run":
+            for event in tailer.read_new_events():
+                self.state = reduce_event(self.state, event)
+            self.start_completed_hands = self.state.completed_hands
+            self.logger.write("bot_bootstrap_state", self.state.to_dict())
+            if self.running:
+                self._maybe_decide(time.monotonic())
         start = time.monotonic()
         while self.running:
             now = time.monotonic()
@@ -93,6 +107,8 @@ class AutomationRunner:
             for event in tailer.read_new_events():
                 any_event = True
                 self.process_event(event, now=time.monotonic())
+                if not self.running:
+                    break
             self._check_pending_timeout(time.monotonic())
             if not any_event:
                 time.sleep(self.config.poll_interval_seconds)
@@ -120,6 +136,10 @@ class AutomationRunner:
                 },
             )
             self.pending = None
+        if self._completed_this_session() >= self.config.max_hands:
+            self.logger.write("bot_pause", {"reason": "max_hands"})
+            self.running = False
+            return
         self._maybe_decide(current_time)
 
     def _maybe_decide(self, now: float) -> None:
@@ -160,7 +180,7 @@ class AutomationRunner:
             )
 
     def _should_stop(self, now: float, start: float) -> bool:
-        if self.state.completed_hands >= self.config.max_hands:
+        if self._completed_this_session() >= self.config.max_hands:
             self.logger.write("bot_pause", {"reason": "max_hands"})
             return True
         if now - start >= self.config.max_runtime_seconds:
@@ -175,6 +195,9 @@ class AutomationRunner:
                 self.logger.write("bot_pause", {"reason": "stop_win_mjchip", "delta_mjchip": delta})
                 return True
         return False
+
+    def _completed_this_session(self) -> int:
+        return self.state.completed_hands - self.start_completed_hands
 
     def _pause(self, reason: str, payload: dict[str, object] | None = None) -> None:
         body: dict[str, object] = {"reason": reason, "state": self.state.to_dict()}
@@ -194,7 +217,7 @@ def decide_once(config: AutomationConfig, events: list[ProbeEvent]) -> BotDecisi
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run JanQ automation in dry-run or UI-live mode.")
     parser.add_argument("--config", default=None, help="automation.yaml or JSON config path")
-    parser.add_argument("--mode", choices=("dry_run", "ui_live"), default=None)
+    parser.add_argument("--mode", choices=("dry_run", "plugin_live", "ui_live"), default=None)
     parser.add_argument("--events-path", default=None)
     parser.add_argument("--session-log-path", default=None)
     parser.add_argument("--strategy", choices=("public", "greedy", "route_ev"), default=None)

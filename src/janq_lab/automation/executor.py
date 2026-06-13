@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import json
+from pathlib import Path
 import random
 import time
 from typing import Any
+import uuid
 
 from janq_lab.automation.config import AutomationConfig
 from janq_lab.automation.policy import BotAction
@@ -35,6 +38,82 @@ class DryRunExecutor:
             action=action.to_dict(),
             details={"would_execute": True},
         )
+
+
+class PluginExecutor:
+    def __init__(self, config: AutomationConfig):
+        self.config = config
+        self.root = Path(config.bridge_dir)
+        self.commands_dir = self.root / "commands"
+        self.results_dir = self.root / "results"
+
+    def execute(self, action: BotAction, rng: random.Random | None = None) -> ExecutionResult:
+        source = rng if rng is not None else random.Random()
+        delay = source.uniform(
+            self.config.action_delay_min_seconds,
+            self.config.action_delay_max_seconds,
+        )
+        time.sleep(delay)
+
+        command_id = uuid.uuid4().hex
+        command = {
+            "id": command_id,
+            "kind": action.kind,
+            "createdAt": _utc_now(),
+            "area": action.area,
+            "discardIndex": action.discard_index,
+            "discardTile": action.discard_tile,
+            "richi": action.richi,
+        }
+        command_path = self.commands_dir / f"{command_id}.json"
+        result_path = self.results_dir / f"{command_id}.json"
+        temp_path = self.commands_dir / f".{command_id}.tmp"
+
+        try:
+            self.commands_dir.mkdir(parents=True, exist_ok=True)
+            self.results_dir.mkdir(parents=True, exist_ok=True)
+            result_path.unlink(missing_ok=True)
+            temp_path.write_text(
+                json.dumps(command, ensure_ascii=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            temp_path.replace(command_path)
+
+            deadline = time.monotonic() + self.config.bridge_result_timeout_seconds
+            while time.monotonic() < deadline:
+                if result_path.exists():
+                    result = json.loads(result_path.read_text(encoding="utf-8-sig"))
+                    result_path.unlink(missing_ok=True)
+                    success = result.get("success") is True
+                    return ExecutionResult(
+                        success=success,
+                        mode="plugin_live",
+                        action=action.to_dict(),
+                        details={
+                            "command_id": command_id,
+                            "delay_s": delay,
+                            "bridge_result": result,
+                        },
+                        error=None if success else str(result.get("error") or "bridge_rejected"),
+                    )
+                time.sleep(0.05)
+            return ExecutionResult(
+                success=False,
+                mode="plugin_live",
+                action=action.to_dict(),
+                details={"command_id": command_id, "delay_s": delay},
+                error="bridge_result_timeout",
+            )
+        except Exception as exc:
+            return ExecutionResult(
+                success=False,
+                mode="plugin_live",
+                action=action.to_dict(),
+                details={"command_id": command_id, "delay_s": delay},
+                error=str(exc),
+            )
+        finally:
+            temp_path.unlink(missing_ok=True)
 
 
 class UiExecutor:
@@ -202,9 +281,17 @@ class UiExecutor:
         self._win32api.mouse_event(self._win32con.MOUSEEVENTF_LEFTUP, x, y, 0, 0)
 
 
-def make_executor(config: AutomationConfig) -> DryRunExecutor | UiExecutor:
+def _utc_now() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def make_executor(config: AutomationConfig) -> DryRunExecutor | PluginExecutor | UiExecutor:
     if config.mode == "dry_run":
         return DryRunExecutor(config)
+    if config.mode == "plugin_live":
+        return PluginExecutor(config)
     if config.mode == "ui_live":
         return UiExecutor(config)
     raise ValueError(f"unknown mode: {config.mode}")

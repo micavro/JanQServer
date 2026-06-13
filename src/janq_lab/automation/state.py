@@ -105,6 +105,9 @@ def reduce_event(state: BotGameState, event: ProbeEvent) -> BotGameState:
         "last_event_type": event.type,
     }
 
+    if event.type == "probe_loaded":
+        return BotGameState(**common)
+
     if event.type == "recv_game_haipai":
         normalized = normalize_haipai_payload(payload)
         hand = normalized["haipai"]
@@ -130,12 +133,15 @@ def reduce_event(state: BotGameState, event: ProbeEvent) -> BotGameState:
     if event.type == "recv_game_tsumo":
         normalized = normalize_tsumo_payload(payload)
         currency = _currency_from_payload(payload, previous=state.currency)
+        balls = _optional_int(payload.get("zandan"))
+        is_agari = _optional_bool(payload.get("agari")) or False
+        phase = "resolving" if balls is not None and balls <= 1 and not is_agari else "user_wait"
         return replace(
             state,
-            phase="user_wait",
+            phase=phase,
             mode=_mode_from_status(payload.get("status")) or state.mode,
             status=_optional_str(payload.get("status")) or state.status,
-            balls=_optional_int(payload.get("zandan")),
+            balls=balls,
             hand=normalized["tehai"],
             dora=normalized["dora"] if normalized["dora"] is not None else state.dora,
             ura_dora=(
@@ -160,15 +166,30 @@ def reduce_event(state: BotGameState, event: ProbeEvent) -> BotGameState:
     if event.type == "recv_janq_result":
         normalized = normalize_result_payload(payload)
         currency = _currency_from_payload(payload, previous=state.currency)
+        completed_hands = state.completed_hands
+        if state.phase != "result":
+            completed_hands += 1
         return replace(
             state,
             phase="result",
             mode=_mode_from_status(payload.get("status")) or state.mode,
             status=_optional_str(payload.get("status")) or state.status,
             hand=normalized["tehai"] or state.hand,
-            completed_hands=state.completed_hands + 1,
+            completed_hands=completed_hands,
             currency=currency,
             last_result=dict(payload),
+            **common,
+        )
+
+    if event.type == "send_ryukyoku":
+        completed_hands = state.completed_hands
+        if state.phase != "result":
+            completed_hands += 1
+        return replace(
+            state,
+            phase="result",
+            completed_hands=completed_hands,
+            last_result={"type": "ryukyoku", **payload},
             **common,
         )
 
@@ -189,9 +210,26 @@ def reduce_event(state: BotGameState, event: ProbeEvent) -> BotGameState:
 
 def _apply_snapshot(state: BotGameState, payload: dict[str, Any], **common: Any) -> BotGameState:
     hand = _snapshot_hand(payload.get("pais"))
-    game_state = _optional_str(payload.get("state")) or state.game_state
-    main_button = _optional_str(payload.get("mainButtonType")) or state.main_button
+    game_state = (
+        _enum_str(payload.get("state"))
+        or _enum_str(payload.get("requestState"))
+        or state.game_state
+    )
+    main_button = (
+        _enum_str(payload.get("mainButtonRequest"))
+        or _enum_str(payload.get("mainButtonType"))
+        or state.main_button
+    )
     phase = _phase_from_snapshot(game_state, main_button, len(hand) or len(state.hand))
+    if state.phase in (
+        "start_sent",
+        "shot_sent",
+        "discard_sent",
+        "agari_sent",
+        "resolving",
+        "user_wait",
+    ):
+        phase = state.phase
     return replace(
         state,
         phase=phase,
@@ -291,3 +329,8 @@ def _optional_bool(value: Any) -> bool | None:
 
 def _optional_str(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _enum_str(value: Any) -> str | None:
+    text = _optional_str(value)
+    return None if text == "None" else text
