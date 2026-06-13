@@ -1,0 +1,10 @@
+mode: dry_run
+events_path: _runtime/logs/janq_events.jsonl
+session_dir: _runtime/sessions
+strategy: route_ev
+max_hands: 100
+max_runtime_seconds: 3600
+confirm_timeout_seconds: 12
+decision_cooldown_seconds: 0.8
+window_title: "セガNET麻雀 MJ"
+

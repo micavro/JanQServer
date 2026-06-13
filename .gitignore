@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+build/
+dist/
+bin/
+obj/
+*.egg-info/
+_runtime/
+
+# Local copied game/runtime artifacts
+sega_net_MJ/
+game_statistics.json
+
+# Binary tools and generated assemblies
+*.exe
+*.dll
+*.pdb
+*.zip
