@@ -26,6 +26,7 @@ class AreaDecision:
     target_tiles: tuple[int, ...]
     target_weight: int
     reason: str
+    target_factors: tuple[float, ...] = ()
 
     @property
     def probability(self) -> float:

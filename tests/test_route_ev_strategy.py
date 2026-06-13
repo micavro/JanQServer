@@ -153,6 +153,87 @@ class RouteEvStrategyTests(unittest.TestCase):
         self.assertEqual((1, 3, 6, 18, 21), decision.target_tiles)
         self.assertIn("suuankou", decision.reason)
 
+    def test_suuankou_route_overrides_normal_tenpai_with_three_ball_build(self):
+        hand = (
+            13,
+            13,
+            19,
+            19,
+            19,
+            20,
+            20,
+            23,
+            24,
+            25,
+            29,
+            29,
+            29,
+        )
+        table = load_tables()["nyukyu_base_table.bytes"]
+
+        area = choose_route_ev_area(hand, table, balls=3)
+        discard = choose_route_ev_discard(hand + (14,), balls=3, drawn_tile=14)
+
+        self.assertEqual(7, area.area)
+        self.assertEqual((13, 20, 23, 24, 25), area.target_tiles)
+        self.assertEqual((1.0, 1.0, 1.0, 1.0, 1.0), area.target_factors)
+        self.assertEqual(4100, area.target_weight)
+        self.assertIn("tenpai_override", area.reason)
+        self.assertEqual(14, discard.discard_tile)
+        self.assertFalse(discard.declare_riichi)
+        self.assertIn("suuankou", discard.reason)
+
+    def test_riichi_lock_prevents_suuankou_shape_rebuild(self):
+        hand = (
+            13,
+            13,
+            19,
+            19,
+            19,
+            20,
+            20,
+            23,
+            24,
+            25,
+            29,
+            29,
+            29,
+        )
+        table = load_tables()["nyukyu_base_table.bytes"]
+
+        decision = choose_route_ev_area(hand, table, balls=3, is_reach=True)
+
+        self.assertEqual((13, 20), decision.target_tiles)
+        self.assertEqual("riichi_locked_wait", decision.reason)
+
+    def test_suuankou_replacement_singletons_are_discounted_targets(self):
+        hand = (
+            0,
+            0,
+            0,
+            1,
+            1,
+            3,
+            3,
+            6,
+            6,
+            9,
+            9,
+            18,
+            21,
+        )
+        table = load_tables()["nyukyu_base_table.bytes"]
+
+        decision = choose_route_ev_area(hand, table, balls=3)
+        factors = dict(zip(decision.target_tiles, decision.target_factors))
+
+        self.assertEqual((1, 3, 6, 9, 18, 21), decision.target_tiles)
+        self.assertEqual(1.0, factors[1])
+        self.assertEqual(1.0, factors[9])
+        self.assertEqual(0.25, factors[18])
+        self.assertEqual(0.25, factors[21])
+        self.assertIn("suuankou", decision.reason)
+
     def test_suuankou_discard_preserves_honor_pair_for_next_area_probability(self):
         hand = (
             9,
@@ -179,7 +260,8 @@ class RouteEvStrategyTests(unittest.TestCase):
         self.assertEqual(16, discard.discard_tile)
         self.assertIn("next_area=3", discard.reason)
         self.assertEqual(3, area.area)
-        self.assertEqual((11, 12, 28), area.target_tiles)
+        self.assertEqual((11, 12, 16, 28), area.target_tiles)
+        self.assertEqual((1.0, 1.0, 0.25, 1.0), area.target_factors)
         self.assertEqual(4400, area.target_weight)
 
     def test_normal_discard_uses_next_area_improvement_probability(self):

@@ -49,6 +49,7 @@ class RouteEstimate:
     missing: int
     targets: tuple[int, ...]
     probability: float
+    target_factors: tuple[float, ...] = ()
 
     @property
     def value(self) -> float:
@@ -72,6 +73,7 @@ class NextAreaEstimate:
     alternate_progress_probability: float
     protection_probability: float
     score: float
+    target_factors: tuple[float, ...] = ()
 
 
 def choose_route_ev_area(
@@ -91,6 +93,31 @@ def choose_route_ev_area(
     winners = winning_tiles(state)
     if winners and is_reach:
         return choose_area_for_targets(table, winners, "riichi_locked_wait")
+    active_route = _active_route(state.counts, balls, table.areas)
+    if (
+        winners
+        and active_route is not None
+        and not active_route.name.startswith("honitsu_")
+        and active_route.missing <= balls
+    ):
+        estimate = _next_area_estimate(
+            state.counts,
+            active_route.targets,
+            table.areas,
+            winners=winners,
+            target_factors=active_route.target_factors,
+        )
+        return _area_decision_from_estimate(
+            table,
+            estimate,
+            f"yakuman_route:{active_route.name}:tenpai_override",
+            win_probability=_conditioned_area_probability(
+                state.counts,
+                winners,
+                estimate.area,
+                table.areas,
+            ),
+        )
     if winners and balls <= 3:
         return choose_area_for_targets(table, winners, f"normal_tenpai_keep:b={balls}")
     if winners:
@@ -109,7 +136,6 @@ def choose_route_ev_area(
             )
         return choose_area_for_targets(table, winners, f"normal_tenpai_keep:no_improve:b={balls}")
 
-    active_route = _active_route(state.counts, balls, table.areas)
     if active_route is None:
         targets = improving_tiles(state)
         if targets:
@@ -138,6 +164,7 @@ def choose_route_ev_area(
         active_route.targets,
         table.areas,
         winners=winners,
+        target_factors=active_route.target_factors,
     )
     return _area_decision_from_estimate(
         table,
@@ -291,9 +318,17 @@ def _area_decision_from_estimate(
     return AreaDecision(
         area=estimate.area,
         target_tiles=estimate.targets,
-        target_weight=sum(
-            table.tile_weight(estimate.area, tile_id)
-            for tile_id in estimate.targets
+        target_weight=round(
+            sum(
+                table.tile_weight(estimate.area, tile_id) * factor
+                for tile_id, factor in zip(
+                    estimate.targets,
+                    _normalized_target_factors(
+                        estimate.targets,
+                        estimate.target_factors,
+                    ),
+                )
+            )
         ),
         reason=(
             f"{reason}:progress={estimate.progress_probability:.3f}"
@@ -302,6 +337,7 @@ def _area_decision_from_estimate(
             f":protect={estimate.protection_probability:.3f}"
             f":v={estimate.score:.3f}"
         ),
+        target_factors=estimate.target_factors,
     )
 
 
@@ -311,11 +347,19 @@ def _next_area_estimate(
     areas: tuple[tuple[int, ...], ...],
     *,
     winners: tuple[int, ...] = (),
+    target_factors: tuple[float, ...] = (),
 ) -> NextAreaEstimate:
     protected = tuple(tile_id for tile_id, count in enumerate(counts) if count == 3)
+    factors = _normalized_target_factors(targets, target_factors)
     scored = []
     for area in range(1, AREA_COUNT + 1):
-        progress_p = _conditioned_area_probability(counts, targets, area, areas)
+        progress_p = _conditioned_area_probability(
+            counts,
+            targets,
+            area,
+            areas,
+            target_factors=factors,
+        )
         win_p = _conditioned_area_probability(counts, winners, area, areas)
         protect_p = _conditioned_area_probability(counts, protected, area, areas)
         score = progress_p + win_p * 0.35 + protect_p * 0.25
@@ -323,7 +367,13 @@ def _next_area_estimate(
     score, progress_p, protect_p, _, area = max(scored)
     alternate_progress_p = max(
         (
-            _conditioned_area_probability(counts, targets, other_area, areas)
+            _conditioned_area_probability(
+                counts,
+                targets,
+                other_area,
+                areas,
+                target_factors=factors,
+            )
             for other_area in range(1, AREA_COUNT + 1)
             if other_area != area
         ),
@@ -336,6 +386,7 @@ def _next_area_estimate(
         alternate_progress_probability=alternate_progress_p,
         protection_probability=protect_p,
         score=score,
+        target_factors=factors,
     )
 
 
@@ -583,6 +634,43 @@ def _suuankou_estimate(
         probability = _route_probability(counts, waits, 1, balls, areas)
         return RouteEstimate("suuankou", SUUANKOU_ROUTE_VALUE, 1, waits, probability)
 
+    best_missing, core_targets = _suuankou_shape(counts)
+    if best_missing == 99:
+        return None
+
+    target_factors = {tile_id: 1.0 for tile_id in core_targets}
+    for tile_id, count in enumerate(counts):
+        if count not in (1, 2):
+            continue
+        next_counts = list(counts)
+        next_counts[tile_id] += 1
+        next_missing, _ = _suuankou_shape(tuple(next_counts))
+        if next_missing < best_missing:
+            target_factors[tile_id] = 1.0
+        elif count == 1:
+            target_factors[tile_id] = max(target_factors.get(tile_id, 0.0), 0.25)
+
+    targets = tuple(sorted(target_factors))
+    factors = tuple(target_factors[tile_id] for tile_id in targets)
+    probability = _route_probability(
+        counts,
+        targets,
+        best_missing,
+        balls,
+        areas,
+        target_factors=factors,
+    )
+    return RouteEstimate(
+        "suuankou",
+        SUUANKOU_ROUTE_VALUE,
+        best_missing,
+        targets,
+        probability,
+        factors,
+    )
+
+
+def _suuankou_shape(counts: tuple[int, ...]) -> tuple[int, tuple[int, ...]]:
     candidates = [tile_id for tile_id, count in enumerate(counts) if count]
     if len(candidates) < 5:
         candidates.extend(tile_id for tile_id in range(TILE_COUNT) if tile_id not in candidates)
@@ -615,12 +703,7 @@ def _suuankou_estimate(
             best_targets = set(targets)
         elif cost == best_missing:
             best_targets.update(targets)
-    if best_missing == 99:
-        return None
-    missing = best_missing
-    targets = tuple(sorted(best_targets))
-    probability = _route_probability(counts, targets, missing, balls, areas)
-    return RouteEstimate("suuankou", SUUANKOU_ROUTE_VALUE, missing, targets, probability)
+    return best_missing, tuple(sorted(best_targets))
 
 
 def _daisangen_estimate(
@@ -724,12 +807,19 @@ def _route_probability(
     missing: int,
     balls: int,
     areas: tuple[tuple[int, ...], ...],
+    *,
+    target_factors: tuple[float, ...] = (),
 ) -> float:
     if missing <= 0:
         return 1.0
     if balls <= 0 or not targets:
         return 0.0
-    p = _best_area_probability(counts, targets, areas)
+    p = _best_area_probability(
+        counts,
+        targets,
+        areas,
+        target_factors=target_factors,
+    )
     return _binomial_tail(balls, missing, p)
 
 
@@ -737,17 +827,19 @@ def _best_area_probability(
     counts: tuple[int, ...],
     targets: tuple[int, ...],
     areas: tuple[tuple[int, ...], ...],
+    *,
+    target_factors: tuple[float, ...] = (),
 ) -> float:
-    target_set = set(targets)
+    factor_by_tile = dict(zip(targets, _normalized_target_factors(targets, target_factors)))
     best = 0.0
     for weights in areas:
         valid_total = sum(weight for tile_id, weight in enumerate(weights) if counts[tile_id] < 4)
         if valid_total <= 0:
             continue
         hit = sum(
-            weight
+            weight * factor_by_tile[tile_id]
             for tile_id, weight in enumerate(weights)
-            if tile_id in target_set and counts[tile_id] < 4
+            if tile_id in factor_by_tile and counts[tile_id] < 4
         )
         best = max(best, hit / valid_total)
     return best
@@ -758,18 +850,29 @@ def _conditioned_area_probability(
     targets: tuple[int, ...],
     area: int,
     areas: tuple[tuple[int, ...], ...],
+    *,
+    target_factors: tuple[float, ...] = (),
 ) -> float:
-    target_set = set(targets)
+    factor_by_tile = dict(zip(targets, _normalized_target_factors(targets, target_factors)))
     weights = areas[area - 1]
     valid_total = sum(weight for tile_id, weight in enumerate(weights) if counts[tile_id] < 4)
     if valid_total <= 0:
         return 0.0
     hit = sum(
-        weight
+        weight * factor_by_tile[tile_id]
         for tile_id, weight in enumerate(weights)
-        if tile_id in target_set and counts[tile_id] < 4
+        if tile_id in factor_by_tile and counts[tile_id] < 4
     )
     return hit / valid_total
+
+
+def _normalized_target_factors(
+    targets: tuple[int, ...],
+    target_factors: tuple[float, ...],
+) -> tuple[float, ...]:
+    if len(target_factors) == len(targets):
+        return target_factors
+    return (1.0,) * len(targets)
 
 
 def _yakuman_lookahead_discard(
@@ -784,7 +887,12 @@ def _yakuman_lookahead_discard(
         post_route = _route_estimate_by_name(after.counts, balls, areas, route.name)
         if post_route is None:
             continue
-        next_area = _next_area_estimate(after.counts, post_route.targets, areas)
+        next_area = _next_area_estimate(
+            after.counts,
+            post_route.targets,
+            areas,
+            target_factors=post_route.target_factors,
+        )
         projected_probability = _binomial_tail(
             balls,
             post_route.missing,
@@ -807,7 +915,12 @@ def _yakuman_lookahead_discard(
             key=lambda tile_id: (_route_keep_score(hand, tile_id, route), -tile_id),
         )
         after = hand.with_removed_one(discard)
-        return discard, _next_area_estimate(after.counts, route.targets, areas)
+        return discard, _next_area_estimate(
+            after.counts,
+            route.targets,
+            areas,
+            target_factors=route.target_factors,
+        )
 
     best_feasible = max(candidate[0] for candidate in route_candidates)
     feasible = [candidate for candidate in route_candidates if candidate[0] == best_feasible]

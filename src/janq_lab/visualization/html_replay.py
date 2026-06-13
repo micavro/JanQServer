@@ -685,7 +685,12 @@ def _render_turn(turn: ReplayTurn, table: NyukyuTable) -> str:
     </div>
     <div class="balls">球数 {turn.balls_before} → {turn.balls_after_draw}</div>
   </div>
-  {_area_bar(turn.area_decision.area, turn.area_decision.target_tiles, table)}
+  {_area_bar(
+      turn.area_decision.area,
+      turn.area_decision.target_tiles,
+      table,
+      turn.area_decision.target_factors,
+  )}
   <div class="probability-panel">
     <div class="probability-head">
       <h4>区域概率</h4>
@@ -727,11 +732,22 @@ def _render_turn(turn: ReplayTurn, table: NyukyuTable) -> str:
 """
 
 
-def _area_bar(active_area: int, targets: tuple[int, ...], table: NyukyuTable) -> str:
+def _area_bar(
+    active_area: int,
+    targets: tuple[int, ...],
+    table: NyukyuTable,
+    target_factors: tuple[float, ...] = (),
+) -> str:
+    factors = target_factors if len(target_factors) == len(targets) else (1.0,) * len(targets)
     buttons = []
     for area in range(1, AREA_COUNT + 1):
         selected = " selected" if area == active_area else ""
-        score = sum(table.tile_weight(area, tile_id) for tile_id in targets)
+        score = round(
+            sum(
+                table.tile_weight(area, tile_id) * factor
+                for tile_id, factor in zip(targets, factors)
+            )
+        )
         buttons.append(
             f'<button class="area{selected}" type="button" data-area="{area}" '
             f'onclick="showArea(this)">'
