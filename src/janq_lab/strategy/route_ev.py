@@ -69,6 +69,7 @@ class NextAreaEstimate:
     area: int
     targets: tuple[int, ...]
     progress_probability: float
+    alternate_progress_probability: float
     protection_probability: float
     score: float
 
@@ -229,6 +230,7 @@ def choose_route_ev_discard(
             (
                 "route_ev_discard:normal_next_area"
                 f":area={next_area.area}:p={next_area.progress_probability:.3f}"
+                f":alt={next_area.alternate_progress_probability:.3f}"
                 f":protect={next_area.protection_probability:.3f}"
             ),
         )
@@ -243,6 +245,7 @@ def choose_route_ev_discard(
             (
                 f"route_ev_discard:{route.name}:next_area={next_area.area}"
                 f":p={next_area.progress_probability:.3f}"
+                f":alt={next_area.alternate_progress_probability:.3f}"
                 f":protect={next_area.protection_probability:.3f}"
             ),
         )
@@ -252,6 +255,7 @@ def choose_route_ev_discard(
     reason = (
         f"route_ev_discard:{route.name}:next_area={next_area.area}"
         f":p={next_area.progress_probability:.3f}"
+        f":alt={next_area.alternate_progress_probability:.3f}"
         f":protect={next_area.protection_probability:.3f}"
     )
     side_suit = _side_route_suit(state.counts, route)
@@ -288,6 +292,7 @@ def _area_decision_from_estimate(
         ),
         reason=(
             f"{reason}:progress={estimate.progress_probability:.3f}"
+            f":alt={estimate.alternate_progress_probability:.3f}"
             f":win={win_probability:.3f}"
             f":protect={estimate.protection_probability:.3f}"
             f":v={estimate.score:.3f}"
@@ -311,10 +316,19 @@ def _next_area_estimate(
         score = progress_p + win_p * 0.35 + protect_p * 0.25
         scored.append((score, progress_p, protect_p, -area, area))
     score, progress_p, protect_p, _, area = max(scored)
+    alternate_progress_p = max(
+        (
+            _conditioned_area_probability(counts, targets, other_area, areas)
+            for other_area in range(1, AREA_COUNT + 1)
+            if other_area != area
+        ),
+        default=0.0,
+    )
     return NextAreaEstimate(
         area=area,
         targets=targets,
         progress_probability=progress_p,
+        alternate_progress_probability=alternate_progress_p,
         protection_probability=protect_p,
         score=score,
     )
@@ -807,6 +821,7 @@ def _yakuman_lookahead_discard(
             (
                 next_area.score,
                 next_area.progress_probability,
+                next_area.alternate_progress_probability,
                 next_area.protection_probability,
                 -_route_keep_score(hand, tile_id, route),
                 tile_id,
@@ -854,6 +869,7 @@ def _honitsu_lookahead_discard(
             (
                 next_area.score,
                 next_area.progress_probability,
+                next_area.alternate_progress_probability,
                 post_route.probability,
                 next_area.protection_probability,
                 -_route_keep_score(hand, tile_id, route),
@@ -891,6 +907,7 @@ def _normal_lookahead_discard(
             (
                 next_area.score,
                 next_area.progress_probability,
+                next_area.alternate_progress_probability,
                 next_area.protection_probability,
                 len(targets),
                 -_tile_keep_bias(hand, tile_id),

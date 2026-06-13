@@ -211,6 +211,37 @@ class RouteEvStrategyTests(unittest.TestCase):
         self.assertEqual(3, area.area)
         self.assertEqual(9700, area.target_weight)
 
+    def test_normal_discard_keeps_east_for_man_side_and_discards_white(self):
+        initial_hand = (
+            2,
+            5,
+            5,
+            6,
+            12,
+            15,
+            16,
+            22,
+            22,
+            27,
+            30,
+            30,
+            31,
+        )
+        hand = initial_hand + (0,)
+        table = load_tables()["nyukyu_base_table.bytes"]
+
+        discard = choose_route_ev_discard(hand, balls=7, drawn_tile=0)
+        next_hand = list(hand)
+        next_hand.remove(discard.discard_tile)
+        area = choose_route_ev_area(next_hand, table, balls=7)
+
+        self.assertEqual(31, discard.discard_tile)
+        self.assertIn("area=1:p=0.850:alt=0.600", discard.reason)
+        self.assertIn(27, next_hand)
+        self.assertEqual(1, area.area)
+        self.assertIn(27, area.target_tiles)
+        self.assertNotIn(31, area.target_tiles)
+
     def test_honitsu_discard_preserves_honor_for_next_area_targets(self):
         hand = (
             0,
