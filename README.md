@@ -27,6 +27,7 @@ python -m janq_lab.analysis.haipai_distribution _runtime\logs\janq_events.jsonl 
 python -m janq_lab.analysis.shot_distribution _runtime\logs\janq_events.jsonl
 python -m janq_lab.analysis.observed_ev _runtime\logs\janq_events.jsonl --currency mjchip
 python -m janq_lab.automation.bot --config automation.example.yaml --mode dry_run
+python -m janq_lab.visualization.html_replay --seed 20260613 --strategy route_ev --output _runtime\replays\janq_replay_route_ev_20260613.html
 ```
 
 Runtime logs and generated artifacts belong under `_runtime`.
