@@ -39,6 +39,7 @@ class DiscardDecision:
     shanten_after: int | None
     accepts: tuple[int, ...]
     reason: str
+    declare_riichi: bool = False
 
 
 def choose_area_for_targets(table: NyukyuTable, targets: tuple[int, ...], reason: str) -> AreaDecision:
@@ -100,4 +101,3 @@ def choose_greedy_discard(hand: TileSet | list[int] | tuple[int, ...]) -> Discar
         accepts=accepts,
         reason=f"min_shanten_accepts_{-accepts_score}",
     )
-

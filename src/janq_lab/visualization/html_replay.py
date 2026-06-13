@@ -50,6 +50,9 @@ class ReplayTurn:
     replays: int
     discard_decision: DiscardDecision
     hand_after_discard: tuple[int, ...]
+    riichi_before: bool = False
+    riichi_declared: bool = False
+    ippatsu_chance: bool = False
 
     @property
     def is_agari(self) -> bool:
@@ -66,6 +69,11 @@ class ReplayHand:
     win: bool
     score: JanqScore | None
     dora_id: int | None
+    ura_dora_id: int | None = None
+    riichi: bool = False
+    riichi_turn: int | None = None
+    double_riichi: bool = False
+    ippatsu_win: bool = False
     source_label: str = "随机起手"
 
 
@@ -150,16 +158,29 @@ def simulate_replay(
         raise ValueError(f"initial hand must have 13 tiles, got {hand.size}")
     original = hand.to_tiles()
     dora_id = rng.randrange(34)
+    ura_dora_id = rng.randrange(34)
 
     turns: list[ReplayTurn] = []
     current_balls = balls
+    riichi_active = False
+    riichi_turn: int | None = None
+    shots_after_riichi = 0
     for turn_number in range(1, max_turns + 1):
         if current_balls <= 0:
             break
         hand_before = hand.to_tiles()
-        area_decision = _call_choose_area(choose_area, hand, table, current_balls)
+        area_decision = _call_choose_area(
+            choose_area,
+            hand,
+            table,
+            current_balls,
+            dora_id=dora_id,
+            ura_dora_id=ura_dora_id,
+            is_reach=riichi_active,
+        )
         balls_before = current_balls
         current_balls -= 1
+        ippatsu_chance = riichi_active and shots_after_riichi == 0
 
         replays = 0
         while True:
@@ -176,7 +197,17 @@ def simulate_replay(
             current_balls += 1
         hand_after_draw = hand.to_tiles()
         balls_after_draw = current_balls
-        discard_decision = _call_choose_discard(choose_discard, hand, current_balls)
+        discard_decision = _call_choose_discard(
+            choose_discard,
+            hand,
+            current_balls,
+            dora_id=dora_id,
+            ura_dora_id=ura_dora_id,
+            is_reach=riichi_active,
+            turn=turn_number,
+            drawn_tile=drawn_tile,
+        )
+        riichi_declared = (not riichi_active) and discard_decision.declare_riichi
 
         if discard_decision.is_agari:
             turns.append(
@@ -192,9 +223,19 @@ def simulate_replay(
                     replays=replays,
                     discard_decision=discard_decision,
                     hand_after_discard=hand.to_tiles(),
+                    riichi_before=riichi_active,
+                    riichi_declared=riichi_declared,
+                    ippatsu_chance=ippatsu_chance,
                 )
             )
-            score = score_hand(hand, dora_id=dora_id)
+            score = score_hand(
+                hand,
+                dora_id=dora_id,
+                ura_dora_id=ura_dora_id,
+                reach=riichi_active and riichi_turn != 1,
+                double_reach=riichi_turn == 1,
+                ippatsu=ippatsu_chance,
+            )
             return ReplayHand(
                 seed=seed,
                 strategy=strategy,
@@ -204,6 +245,11 @@ def simulate_replay(
                 win=True,
                 score=score,
                 dora_id=dora_id,
+                ura_dora_id=ura_dora_id,
+                riichi=riichi_active,
+                riichi_turn=riichi_turn,
+                double_riichi=riichi_turn == 1,
+                ippatsu_win=ippatsu_chance,
                 source_label=source_label,
             )
 
@@ -223,8 +269,17 @@ def simulate_replay(
                 replays=replays,
                 discard_decision=discard_decision,
                 hand_after_discard=hand.to_tiles(),
+                riichi_before=riichi_active,
+                riichi_declared=riichi_declared,
+                ippatsu_chance=ippatsu_chance,
             )
         )
+        if riichi_declared:
+            riichi_active = True
+            riichi_turn = turn_number
+            shots_after_riichi = 0
+        elif riichi_active:
+            shots_after_riichi += 1
 
     return ReplayHand(
         seed=seed,
@@ -235,6 +290,11 @@ def simulate_replay(
         win=False,
         score=None,
         dora_id=dora_id,
+        ura_dora_id=ura_dora_id,
+        riichi=riichi_active,
+        riichi_turn=riichi_turn,
+        double_riichi=riichi_turn == 1,
+        ippatsu_win=False,
         source_label=source_label,
     )
 
@@ -564,13 +624,17 @@ def _render_example_list(replay_set: ReplaySet) -> str:
 
 def _render_replay_card(replay: ReplayHand, index: int, table: NyukyuTable) -> str:
     active = " active" if index == 0 else ""
+    riichi_meta = "无立直" if not replay.riichi else (
+        f"{'双立直' if replay.double_riichi else '立直'} 第{replay.riichi_turn}球"
+        + (" / 一发" if replay.ippatsu_win else "")
+    )
     return f"""
 <section class="replay-card{active}" data-replay-index="{index}">
   <div class="replay-head">
     <div>
       <p class="eyebrow">Example #{index + 1}</p>
       <h2>{escape(_result_text(replay))}</h2>
-      <p class="subtle">seed={replay.seed} · {escape(replay.source_label)} · Dora: {_tile_label(replay.dora_id)}</p>
+      <p class="subtle">seed={replay.seed} · {escape(replay.source_label)} · Dora: {_tile_label(replay.dora_id)} · Ura: {_tile_label(replay.ura_dora_id)} · {escape(riichi_meta)}</p>
     </div>
     <div class="score-box">{escape(_score_text(replay.score))}</div>
   </div>
@@ -604,7 +668,10 @@ def _render_turns(replay: ReplayHand, table: NyukyuTable) -> str:
 def _render_turn(turn: ReplayTurn, table: NyukyuTable) -> str:
     discard = turn.discard_decision
     discard_text = "和牌" if discard.is_agari else f"弃 {_tile_label(discard.discard_tile)}"
+    if discard.declare_riichi:
+        discard_text = f"{discard_text} + 立直"
     protection = "保护 +1球" if turn.fourth_copy else "无保护"
+    riichi_text = _turn_riichi_text(turn)
     accepts = ", ".join(_tile_label(tile_id) for tile_id in discard.accepts) or "无"
     targets = ", ".join(_tile_label(tile_id) for tile_id in turn.area_decision.target_tiles) or "无"
     probability_data = _json_script(_area_probability_data(turn.hand_before, table))
@@ -644,6 +711,10 @@ def _render_turn(turn: ReplayTurn, table: NyukyuTable) -> str:
       <span>重抽</span>
       <b>{turn.replays}</b>
     </div>
+    <div class="turn-detail">
+      <span>立直</span>
+      <b>{escape(riichi_text)}</b>
+    </div>
   </div>
   <dl class="reason-list">
     <div><dt>目标牌</dt><dd>{escape(targets)}</dd></div>
@@ -674,6 +745,16 @@ def _compact_hand(title: str, tiles: tuple[int, ...]) -> str:
   <div class="tiles small">{''.join(_tile_html(tile_id) for tile_id in tiles)}</div>
 </div>
 """
+
+
+def _turn_riichi_text(turn: ReplayTurn) -> str:
+    if turn.discard_decision.declare_riichi:
+        return "本球宣告"
+    if turn.ippatsu_chance:
+        return "已立直 / 一发机会"
+    if turn.riichi_before:
+        return "已立直"
+    return "未立直"
 
 
 def _turn_hand_flow(turn: ReplayTurn) -> str:
@@ -761,7 +842,20 @@ def _call_choose_area(
     hand: TileSet,
     table: NyukyuTable,
     balls: int,
+    *,
+    dora_id: int | None = None,
+    ura_dora_id: int | None = None,
+    is_reach: bool = False,
 ) -> AreaDecision:
+    if getattr(choose_area, "uses_full_context", False):
+        return choose_area(
+            hand,
+            table,
+            balls,
+            dora_id=dora_id,
+            ura_dora_id=ura_dora_id,
+            is_reach=is_reach,
+        )
     if getattr(choose_area, "uses_context", False):
         return choose_area(hand, table, balls)
     return choose_area(hand, table)
@@ -771,7 +865,23 @@ def _call_choose_discard(
     choose_discard: ChooseDiscard,
     hand: TileSet,
     balls: int,
+    *,
+    dora_id: int | None = None,
+    ura_dora_id: int | None = None,
+    is_reach: bool = False,
+    turn: int | None = None,
+    drawn_tile: int | None = None,
 ) -> DiscardDecision:
+    if getattr(choose_discard, "uses_full_context", False):
+        return choose_discard(
+            hand,
+            balls,
+            dora_id=dora_id,
+            ura_dora_id=ura_dora_id,
+            is_reach=is_reach,
+            turn=turn,
+            drawn_tile=drawn_tile,
+        )
     if getattr(choose_discard, "uses_context", False):
         return choose_discard(hand, balls)
     return choose_discard(hand)
@@ -1376,7 +1486,7 @@ h1 {
 
 .turn-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
   margin-top: 12px;
 }

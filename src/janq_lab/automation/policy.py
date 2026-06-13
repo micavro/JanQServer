@@ -140,7 +140,7 @@ class StrategyPolicy:
                 "discard",
                 discard_index=discard_index,
                 discard_tile=state.hand[discard_index - 1],
-                richi=False,
+                richi=discard_decision.declare_riichi,
             ),
             reason=f"{discard_decision.reason}:{reason}",
             strategy=self.strategy,
@@ -157,7 +157,14 @@ class StrategyPolicy:
         if self.strategy == "greedy":
             return choose_greedy_area(hand, self.normal_table)
         if self.strategy == "route_ev":
-            return choose_route_ev_area(hand, self.normal_table, balls)
+            return choose_route_ev_area(
+                hand,
+                self.normal_table,
+                balls,
+                dora_id=state.dora,
+                ura_dora_id=state.ura_dora,
+                is_reach=state.is_reach,
+            )
         raise ValueError(f"unknown strategy: {self.strategy}")
 
     def _choose_discard(self, state: BotGameState, hand: Any, balls: int) -> DiscardDecision:
@@ -168,7 +175,14 @@ class StrategyPolicy:
         if self.strategy == "greedy":
             return choose_greedy_discard(hand)
         if self.strategy == "route_ev":
-            return choose_route_ev_discard(hand, balls)
+            return choose_route_ev_discard(
+                hand,
+                balls,
+                dora_id=state.dora,
+                ura_dora_id=state.ura_dora,
+                is_reach=state.is_reach,
+                drawn_tile=state.hand[-1] if len(state.hand) == 14 else None,
+            )
         raise ValueError(f"unknown strategy: {self.strategy}")
 
 
@@ -209,4 +223,5 @@ def _discard_to_dict(decision: DiscardDecision) -> dict[str, Any]:
         "shanten_after": decision.shanten_after,
         "accepts": decision.accepts,
         "reason": decision.reason,
+        "declare_riichi": decision.declare_riichi,
     }

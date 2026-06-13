@@ -22,6 +22,21 @@ class ScoringEconomyTest(unittest.TestCase):
         self.assertIn("haku", score.yaku)
         self.assertEqual(payout_for_score(score, bet=10), 10)
 
+    def test_reach_ippatsu_dora_and_ura_dora_add_han(self) -> None:
+        score = score_hand(
+            [1, 2, 3, 4, 5, 6, 11, 12, 13, 23, 23, 23, 24, 25],
+            dora_id=1,
+            ura_dora_id=23,
+            reach=True,
+            ippatsu=True,
+        )
+
+        self.assertEqual(score.han, 9)
+        self.assertIn("reach", score.yaku)
+        self.assertIn("ippatsu", score.yaku)
+        self.assertIn("dora", score.yaku)
+        self.assertIn("ura_dora", score.yaku)
+
     def test_suuankou_is_yakuman(self) -> None:
         score = score_hand([0, 0, 0, 1, 1, 1, 9, 9, 9, 18, 18, 18, 31, 31])
         self.assertEqual(score.yakuman_count, 1)

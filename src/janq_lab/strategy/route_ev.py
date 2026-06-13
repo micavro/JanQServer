@@ -23,8 +23,8 @@ from janq_lab.model.hand import (
     tile_set,
     winning_tiles,
 )
-from janq_lab.model.scoring import HONORS, PIN, SOU, JanqScore, score_hand
-from janq_lab.strategy.greedy import AreaDecision, DiscardDecision
+from janq_lab.model.scoring import GREEN, HONORS, PIN, SOU, JanqScore, score_hand
+from janq_lab.strategy.greedy import AreaDecision, DiscardDecision, choose_area_for_targets
 from janq_lab.strategy.public import choose_public_area, choose_public_discard
 from janq_lab.tiles import TILE_COUNT
 
@@ -54,18 +54,55 @@ class RouteEstimate:
         return self.reward * self.probability
 
 
+@dataclass(frozen=True)
+class TenpaiDiscardEstimate:
+    discard: int
+    waits: tuple[int, ...]
+    win_probability: float
+    value: float
+    declare_riichi: bool
+
+
 def choose_route_ev_area(
     hand: TileSet | list[int] | tuple[int, ...],
     table: NyukyuTable,
     balls: int,
+    *,
+    dora_id: int | None = None,
+    ura_dora_id: int | None = None,
+    is_reach: bool = False,
 ) -> AreaDecision:
     state = hand if isinstance(hand, TileSet) else tile_set(hand)
+    yakuman_waits = _yakuman_waits(state.counts)
+    if yakuman_waits:
+        return choose_area_for_targets(table, yakuman_waits, "yakuman_tenpai_locked")
+
+    winners = winning_tiles(state)
+    if winners and is_reach:
+        return choose_area_for_targets(table, winners, "riichi_locked_wait")
+    if winners and balls <= 3:
+        return choose_area_for_targets(table, winners, f"normal_tenpai_keep:b={balls}")
+    if winners:
+        improve_targets = _normal_tenpai_improvement_targets(
+            state,
+            balls,
+            table.areas,
+            dora_id=dora_id,
+            ura_dora_id=ura_dora_id,
+        )
+        if improve_targets:
+            return choose_area_for_targets(
+                table,
+                improve_targets,
+                f"normal_tenpai_improve:b={balls}",
+            )
+        return choose_area_for_targets(table, winners, f"normal_tenpai_keep:no_improve:b={balls}")
+
     active_route = _active_route(state.counts, balls, table.areas)
     if active_route is None:
         return choose_public_area(state, table)
     if active_route.name.startswith("honitsu_"):
         return choose_public_area(state, table)
-    winners = winning_tiles(state)
     protected = tuple(tile_id for tile_id, count in enumerate(state.counts) if count == 3)
 
     scored = []
@@ -90,35 +127,79 @@ def choose_route_ev_area(
 def choose_route_ev_discard(
     hand: TileSet | list[int] | tuple[int, ...],
     balls: int,
+    *,
+    dora_id: int | None = None,
+    ura_dora_id: int | None = None,
+    is_reach: bool = False,
+    turn: int | None = None,
+    drawn_tile: int | None = None,
 ) -> DiscardDecision:
     state = hand if isinstance(hand, TileSet) else tile_set(hand)
+    if is_reach:
+        if is_complete_hand(state):
+            return DiscardDecision(True, None, None, (), "complete_hand:riichi")
+        discard = drawn_tile if drawn_tile is not None and state.counts[drawn_tile] else _least_route_value_discard(state)
+        after = state.with_removed_one(discard)
+        return DiscardDecision(
+            False,
+            discard,
+            shanten(after),
+            winning_tiles(after),
+            "riichi_locked_tsumogiri",
+        )
     if is_complete_hand(state):
         return DiscardDecision(True, None, None, (), "complete_hand")
     if balls <= 0:
         discard = _least_route_value_discard(state)
         return DiscardDecision(False, discard, None, (), "no_balls")
 
-    route = _active_route(state.counts, balls, _default_areas())
-    if route is None:
-        return choose_public_discard(state)
-    if route.name.startswith("honitsu_"):
-        return choose_public_discard(state)
-
-    tenpai_discard = _route_tenpai_discard(state, route, _default_areas())
-    if tenpai_discard is not None:
-        discard, accepts = tenpai_discard
+    areas = _default_areas()
+    yakuman_tenpai_discard = _yakuman_tenpai_discard(state, areas)
+    if yakuman_tenpai_discard is not None:
+        discard, accepts = yakuman_tenpai_discard
         after = state.with_removed_one(discard)
-        reason = f"route_ev_discard:{route.name}:yakuman_tenpai"
-        side_suit = _side_route_suit(after.counts, route)
-        if side_suit is not None and route.name in {"suuankou", "daisangen"}:
-            reason = f"{reason}:side_{_suit_name(side_suit)}"
         return DiscardDecision(
             False,
             discard,
             shanten(after),
             accepts,
-            reason,
+            "route_ev_discard:yakuman_tenpai_locked",
+            declare_riichi=True,
         )
+
+    route = _active_route(state.counts, balls, _default_areas())
+    tenpai_discard = _normal_tenpai_discard(
+        state,
+        balls,
+        areas,
+        dora_id=dora_id,
+        ura_dora_id=ura_dora_id,
+        turn=turn,
+    )
+    if tenpai_discard is not None and _should_keep_normal_tenpai(tenpai_discard.value, route, balls):
+        after = state.with_removed_one(tenpai_discard.discard)
+        reason = (
+            "route_ev_discard:normal_tenpai"
+            f":win_p={tenpai_discard.win_probability:.3f}"
+            f":v={tenpai_discard.value:.2f}"
+        )
+        if tenpai_discard.declare_riichi:
+            reason = f"{reason}:riichi"
+        else:
+            reason = f"{reason}:dama_improve_window"
+        return DiscardDecision(
+            False,
+            tenpai_discard.discard,
+            shanten(after),
+            tenpai_discard.waits,
+            reason,
+            declare_riichi=tenpai_discard.declare_riichi,
+        )
+
+    if route is None:
+        return choose_public_discard(state)
+    if route.name.startswith("honitsu_"):
+        return choose_public_discard(state)
 
     discard = min(
         discard_options(state),
@@ -139,7 +220,9 @@ def choose_route_ev_discard(
 
 
 choose_route_ev_area.uses_context = True  # type: ignore[attr-defined]
+choose_route_ev_area.uses_full_context = True  # type: ignore[attr-defined]
 choose_route_ev_discard.uses_context = True  # type: ignore[attr-defined]
+choose_route_ev_discard.uses_full_context = True  # type: ignore[attr-defined]
 
 
 def _area_expectation(
@@ -390,7 +473,8 @@ def _suuankou_estimate(
     if len(candidates) < 5:
         candidates.extend(tile_id for tile_id in range(TILE_COUNT) if tile_id not in candidates)
 
-    best: tuple[int, tuple[int, ...], int, tuple[int, ...]] | None = None
+    best_missing = 99
+    best_targets: set[int] = set()
     for pair in candidates:
         pair_cost = max(0, 2 - counts[pair])
         triplet_options = sorted(
@@ -401,17 +485,26 @@ def _suuankou_estimate(
         selected = tuple(tile_id for _, tile_id in triplet_options[:4])
         if len(selected) < 4:
             continue
-        cost = pair_cost + sum(max(0, 3 - counts[tile_id]) for tile_id in selected)
+        selected_costs = [cost for cost, _ in triplet_options[:4]]
+        cost = pair_cost + sum(selected_costs)
+        cutoff_cost = selected_costs[-1]
         targets = []
         if counts[pair] < 2:
             targets.append(pair)
-        targets.extend(tile_id for tile_id in selected if counts[tile_id] < 3)
-        item = (cost, selected, pair, tuple(sorted(set(targets))))
-        if best is None or item < best:
-            best = item
-    if best is None:
+        targets.extend(
+            tile_id
+            for option_cost, tile_id in triplet_options
+            if option_cost <= cutoff_cost and counts[tile_id] < 3
+        )
+        if cost < best_missing:
+            best_missing = cost
+            best_targets = set(targets)
+        elif cost == best_missing:
+            best_targets.update(targets)
+    if best_missing == 99:
         return None
-    missing, _, _, targets = best
+    missing = best_missing
+    targets = tuple(sorted(best_targets))
     probability = _route_probability(counts, targets, missing, balls, areas)
     return RouteEstimate("suuankou", SUUANKOU_ROUTE_VALUE, missing, targets, probability)
 
@@ -565,6 +658,210 @@ def _conditioned_area_probability(
     return hit / valid_total
 
 
+def _yakuman_tenpai_discard(
+    hand: TileSet,
+    areas: tuple[tuple[int, ...], ...],
+) -> tuple[int, tuple[int, ...]] | None:
+    candidates = []
+    for tile_id in discard_options(hand):
+        after = hand.with_removed_one(tile_id)
+        waits = _yakuman_waits(after.counts)
+        if not waits:
+            continue
+        win_p = _best_area_probability(after.counts, waits, areas)
+        protected = tuple(i for i, count in enumerate(after.counts) if count == 3)
+        protect_p = _best_area_probability(after.counts, protected, areas) if protected else 0.0
+        fourth_relief = int(hand.counts[tile_id] >= 4)
+        keep_score = _tile_keep_bias(hand, tile_id)
+        candidates.append(
+            (
+                win_p,
+                len(waits),
+                protect_p,
+                fourth_relief,
+                -keep_score,
+                -tile_id,
+                tile_id,
+                waits,
+            )
+        )
+    if not candidates:
+        return None
+    *_, discard, waits = max(candidates)
+    return discard, waits
+
+
+def _normal_tenpai_discard(
+    hand: TileSet,
+    balls: int,
+    areas: tuple[tuple[int, ...], ...],
+    *,
+    dora_id: int | None,
+    ura_dora_id: int | None,
+    turn: int | None,
+) -> TenpaiDiscardEstimate | None:
+    estimates = []
+    declare_riichi = balls <= 3
+    double_reach = declare_riichi and turn == 1
+    for tile_id in discard_options(hand):
+        after = hand.with_removed_one(tile_id)
+        waits = winning_tiles(after)
+        if not waits:
+            continue
+        win_p = _best_area_probability(after.counts, waits, areas)
+        wait_value = _wait_value(
+            after,
+            waits,
+            areas,
+            dora_id=dora_id,
+            ura_dora_id=ura_dora_id,
+            reach=declare_riichi,
+            double_reach=double_reach,
+        )
+        value = _at_least_one(balls, win_p) * wait_value
+        protected = tuple(i for i, count in enumerate(after.counts) if count == 3)
+        protect_p = _best_area_probability(after.counts, protected, areas) if protected else 0.0
+        keep_score = _tile_keep_bias(hand, tile_id)
+        estimates.append(
+            (
+                value,
+                win_p,
+                len(waits),
+                protect_p,
+                -keep_score,
+                -tile_id,
+                TenpaiDiscardEstimate(
+                    discard=tile_id,
+                    waits=waits,
+                    win_probability=win_p,
+                    value=value,
+                    declare_riichi=declare_riichi,
+                ),
+            )
+        )
+    if not estimates:
+        return None
+    return max(estimates)[-1]
+
+
+def _should_keep_normal_tenpai(
+    tenpai_value: float,
+    route: RouteEstimate | None,
+    balls: int,
+) -> bool:
+    if route is not None and not route.name.startswith("honitsu_"):
+        if route.missing <= balls and route.value > tenpai_value * 1.05:
+            return False
+    if balls <= 2:
+        return True
+    if route is None or route.value <= 0:
+        return True
+    return route.value <= tenpai_value * 1.35
+
+
+def _normal_tenpai_improvement_targets(
+    hand: TileSet,
+    balls: int,
+    areas: tuple[tuple[int, ...], ...],
+    *,
+    dora_id: int | None,
+    ura_dora_id: int | None,
+) -> tuple[int, ...]:
+    if balls < 4:
+        return ()
+    current_waits = winning_tiles(hand)
+    if not current_waits:
+        return ()
+    current_value = _wait_value(
+        hand,
+        current_waits,
+        areas,
+        dora_id=dora_id,
+        ura_dora_id=ura_dora_id,
+        reach=False,
+        double_reach=False,
+    )
+    targets = []
+    for tile_id in range(TILE_COUNT):
+        if tile_id in current_waits or not hand.can_add(tile_id):
+            continue
+        candidate = hand.with_added(tile_id)
+        improved = _normal_tenpai_discard(
+            candidate,
+            max(1, balls - 1),
+            areas,
+            dora_id=dora_id,
+            ura_dora_id=ura_dora_id,
+            turn=None,
+        )
+        if improved is None:
+            continue
+        if set(improved.waits) != set(current_waits) and improved.value > current_value * 1.35:
+            targets.append(tile_id)
+    return tuple(targets)
+
+
+def _wait_value(
+    hand: TileSet,
+    waits: tuple[int, ...],
+    areas: tuple[tuple[int, ...], ...],
+    *,
+    dora_id: int | None,
+    ura_dora_id: int | None,
+    reach: bool,
+    double_reach: bool,
+) -> float:
+    if not waits:
+        return 0.0
+    best_weights = max(
+        areas,
+        key=lambda weights: sum(weights[tile_id] for tile_id in waits if hand.counts[tile_id] < 4),
+    )
+    total = sum(best_weights[tile_id] for tile_id in waits if hand.counts[tile_id] < 4)
+    if total <= 0:
+        return 0.0
+    value = 0.0
+    for tile_id in waits:
+        weight = best_weights[tile_id] if hand.counts[tile_id] < 4 else 0
+        if weight <= 0:
+            continue
+        complete = hand.with_added(tile_id)
+        value += (weight / total) * _complete_value_context(
+            complete.counts,
+            dora_id=dora_id,
+            ura_dora_id=ura_dora_id,
+            reach=reach,
+            double_reach=double_reach,
+            ippatsu=False,
+        )
+    return value
+
+
+def _complete_value_context(
+    counts: tuple[int, ...],
+    *,
+    dora_id: int | None,
+    ura_dora_id: int | None,
+    reach: bool,
+    double_reach: bool,
+    ippatsu: bool,
+) -> float:
+    score = score_hand(
+        TileSet(counts),
+        dora_id=dora_id,
+        ura_dora_id=ura_dora_id,
+        reach=reach,
+        double_reach=double_reach,
+        ippatsu=ippatsu,
+    )
+    payout = float(payout_for_score(score, bet=10))
+    if score.yakuman_count:
+        if score.han >= 13 and "kazoe_yakuman" in score.yaku:
+            return max(COUNTED_YAKUMAN_COMPLETE_VALUE, payout + 90.0)
+        return max(YAKUMAN_COMPLETE_VALUE * min(4, score.yakuman_count), payout + 120.0)
+    return payout + _paren_entry_value(score)
+
+
 def _route_tenpai_discard(
     hand: TileSet,
     route: RouteEstimate,
@@ -599,6 +896,7 @@ def _route_tenpai_discard(
     return discard, waits
 
 
+@lru_cache(maxsize=600_000)
 def _route_waits(counts: tuple[int, ...], route_name: str) -> tuple[int, ...]:
     hand = TileSet(counts)
     waits = []
@@ -610,6 +908,53 @@ def _route_waits(counts: tuple[int, ...], route_name: str) -> tuple[int, ...]:
         if yaku_name in score.yaku and score.yakuman_count:
             waits.append(tile_id)
     return tuple(waits)
+
+
+@lru_cache(maxsize=600_000)
+def _yakuman_waits(counts: tuple[int, ...]) -> tuple[int, ...]:
+    if not _yakuman_wait_gate(counts):
+        return ()
+    hand = TileSet(counts)
+    waits = []
+    for tile_id in winning_tiles(hand):
+        if score_hand(hand.with_added(tile_id)).is_yakuman:
+            waits.append(tile_id)
+    return tuple(waits)
+
+
+def _yakuman_wait_gate(counts: tuple[int, ...]) -> bool:
+    if sum(counts) != 13:
+        return False
+    pairish = sum(1 for count in counts if count >= 2)
+    triplets = sum(1 for count in counts if count >= 3)
+    if triplets >= 3 and pairish >= 4:
+        return True
+
+    dragon_tiles = sum(counts[tile_id] for tile_id in DRAGONS)
+    if dragon_tiles >= 7:
+        return True
+
+    terminal_unique = sum(1 for tile_id in TERMINAL_AND_HONOR_IDS if counts[tile_id])
+    if terminal_unique >= 12:
+        return True
+
+    honor_tiles = sum(counts[tile_id] for tile_id in HONORS)
+    if honor_tiles >= 12:
+        return True
+
+    green_tiles = sum(counts[tile_id] for tile_id in GREEN)
+    if green_tiles >= 12:
+        return True
+
+    terminal_tiles = sum(
+        count
+        for tile_id, count in enumerate(counts)
+        if tile_id < 27 and tile_id % 9 in (0, 8)
+    )
+    if terminal_tiles + honor_tiles >= 12:
+        return True
+
+    return any(sum(counts[tile_id] for tile_id in suit) >= 13 for suit in SUITS)
 
 
 def _route_yaku_name(route_name: str) -> str | None:

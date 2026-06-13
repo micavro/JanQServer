@@ -45,6 +45,7 @@ class ScoredHandResult:
     simulation: SimulationResult
     score: JanqScore | None
     dora_id: int | None
+    ura_dora_id: int | None
     payout: int
 
 
@@ -63,6 +64,9 @@ class SessionResult:
     normal_yakuman_payout: int = 0
     paren_payout: int = 0
     yakuman_challenge_payout: int = 0
+    normal_riichi: bool = False
+    normal_double_riichi: bool = False
+    normal_ippatsu_win: bool = False
 
     @property
     def net(self) -> int:
@@ -115,6 +119,10 @@ class EconomySummary:
     win_counts: dict[str, int]
     yakuman_yaku_counts: dict[str, int]
     yakuman_yaku_counts_by_phase: dict[str, dict[str, int]]
+    normal_riichi_count: int = 0
+    normal_riichi_rate: float = 0.0
+    normal_ippatsu_wins: int = 0
+    normal_double_riichi_count: int = 0
     assumptions: tuple[str, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict[str, Any]:
@@ -153,6 +161,10 @@ class EconomySummary:
             "win_counts": self.win_counts,
             "yakuman_yaku_counts": self.yakuman_yaku_counts,
             "yakuman_yaku_counts_by_phase": self.yakuman_yaku_counts_by_phase,
+            "normal_riichi_count": self.normal_riichi_count,
+            "normal_riichi_rate": self.normal_riichi_rate,
+            "normal_ippatsu_wins": self.normal_ippatsu_wins,
+            "normal_double_riichi_count": self.normal_double_riichi_count,
             "assumptions": self.assumptions,
         }
 
@@ -208,6 +220,9 @@ def run_economy_monte_carlo(
     nets = [float(result.net) for result in session_results]
     payouts = [float(result.payout) for result in session_results]
     normal_wins = sum(1 for result in session_results if result.normal_win)
+    normal_riichi_count = sum(1 for result in session_results if result.normal_riichi)
+    normal_ippatsu_wins = sum(1 for result in session_results if result.normal_ippatsu_win)
+    normal_double_riichi_count = sum(1 for result in session_results if result.normal_double_riichi)
     paren_entries = sum(1 for result in session_results if result.entered_paren)
     yakuman_entries = sum(1 for result in session_results if result.entered_yakuman_challenge)
     normal_levels = Counter(
@@ -305,14 +320,19 @@ def run_economy_monte_carlo(
             phase: dict(sorted(counter.items()))
             for phase, counter in yakuman_by_phase.items()
         },
+        normal_riichi_count=normal_riichi_count,
+        normal_riichi_rate=normal_riichi_count / sessions,
+        normal_ippatsu_wins=normal_ippatsu_wins,
+        normal_double_riichi_count=normal_double_riichi_count,
         assumptions=(
             _normal_haipai_assumption(normal_haipai_source, observed_haipai),
             "normal dora tile type is sampled uniformly from the 34 JanQ tile ids",
+            "normal ura-dora tile type is sampled uniformly from the 34 JanQ tile ids and counts only after reach",
             "nyukyu draws use the copied client's official 7-area probability table",
             "fourth-copy draws refund one ball, matching the official help",
             "bonus modes use the copied client's paren/yakuman setup tables",
             _paren_table_assumption(paren_table_mode),
-            "reach is not used by the baseline strategy, so ura-dora and ippatsu are not modeled",
+            "route_ev may declare reach in normal mode; reached hands are locked to tsumogiri and first draw after reach can score ippatsu",
         ),
     )
 
@@ -341,6 +361,7 @@ def simulate_session(
         choose_area=choose_area,
         choose_discard=choose_discard,
         dora_id=_random_dora(rng),
+        ura_dora_id=_random_dora(rng),
     )
     if normal.score is None:
         return SessionResult(
@@ -353,6 +374,9 @@ def simulate_session(
             normal_score=None,
             paren_scores=(),
             yakuman_scores=(),
+            normal_riichi=normal.simulation.riichi,
+            normal_double_riichi=normal.simulation.double_riichi,
+            normal_ippatsu_win=False,
         )
 
     normal_payout = payout_for_score(normal.score, bet=bet)
@@ -440,6 +464,9 @@ def simulate_session(
         normal_yakuman_payout=normal_yakuman_payout,
         paren_payout=paren_payout,
         yakuman_challenge_payout=yakuman_bonus_payout,
+        normal_riichi=normal.simulation.riichi,
+        normal_double_riichi=normal.simulation.double_riichi,
+        normal_ippatsu_win=normal.simulation.ippatsu_win,
     )
 
 
@@ -452,6 +479,7 @@ def _simulate_scored_hand(
     choose_area: Any,
     choose_discard: Any,
     dora_id: int | None,
+    ura_dora_id: int | None = None,
 ) -> ScoredHandResult:
     simulation = simulate_hand(
         initial_hand,
@@ -460,14 +488,30 @@ def _simulate_scored_hand(
         rng=rng,
         choose_area=choose_area,
         choose_discard=choose_discard,
+        dora_id=dora_id,
+        ura_dora_id=ura_dora_id,
     )
     if not simulation.win:
-        return ScoredHandResult(simulation=simulation, score=None, dora_id=dora_id, payout=0)
-    score = score_hand(simulation.final_hand, dora_id=dora_id)
+        return ScoredHandResult(
+            simulation=simulation,
+            score=None,
+            dora_id=dora_id,
+            ura_dora_id=ura_dora_id,
+            payout=0,
+        )
+    score = score_hand(
+        simulation.final_hand,
+        dora_id=dora_id,
+        ura_dora_id=ura_dora_id,
+        reach=simulation.riichi and not simulation.double_riichi,
+        double_reach=simulation.double_riichi,
+        ippatsu=simulation.ippatsu_win,
+    )
     return ScoredHandResult(
         simulation=simulation,
         score=score,
         dora_id=dora_id,
+        ura_dora_id=ura_dora_id,
         payout=payout_for_score(score),
     )
 

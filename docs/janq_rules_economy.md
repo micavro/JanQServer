@@ -40,7 +40,7 @@ This document records the rule/economy model used by `janq_lab` simulations.
 - No calls, no kan, no red dora, no fu.
 - East round is fixed. East, white, green, and red dragon are value tiles.
 - South, West, and North are not value-tile yaku by themselves.
-- Reach, double reach, and ippatsu are normal-game-only effects.
+- Reach, double reach, ippatsu, and ura-dora are normal-game-only effects.
 - First draw in hachiren/yakuman challenge does not award tenhou or ippatsu.
 - 13+ han is counted yakuman.
 - Natural yakuman can overlap up to four yakuman units.
@@ -90,7 +90,8 @@ and overlapping yakuman add their overlapping units to that count.
   distribution.
 - Economy simulation can instead bootstrap normal haipai from captured probe
   logs with `--normal-haipai-source observed --observed-events <jsonl>`.
-- Normal dora tile type is sampled uniformly from the 34 JanQ tile ids.
+- Normal dora and ura-dora tile types are sampled uniformly from the 34 JanQ
+  tile ids.
 - Shot draws use the copied client's official nyukyu tables.
 - Hachiren and yakuman challenge starting hands use the copied client's special
   tables.
@@ -98,8 +99,9 @@ and overlapping yakuman add their overlapping units to that count.
   hand's han clamped to 2..12.
 - `select_table` hachiren mode samples `paren_N_table.bytes` from
   `paren_select_table.bytes`.
-- The current public baseline does not declare reach, so ura-dora and ippatsu
-  are not active.
+- `route_ev` can declare reach in normal mode. After reach, the hand is locked:
+  it keeps the tenpai shape, discards drawn non-winning tiles, can score
+  ippatsu on the first draw after reach, and counts ura-dora on a win.
 
 ## Commands
 

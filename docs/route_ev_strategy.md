@@ -6,12 +6,14 @@ This document describes the current route-aware strategy prototype.
 
 The strategy treats JanQ as a route-selection problem:
 
-1. If a yakuman route is genuinely close, override the public baseline and chase
-   it.
-2. Otherwise, let the public suit/dragon heuristic handle honitsu-ish hands.
-3. Preserve normal hand efficiency unless the yakuman route has enough remaining
-   balls and enough probability mass in the nyukyu table.
-4. Area decisions include fourth-copy protection: a tile already held as three
+1. If a yakuman tenpai exists, never break it. The strategy may declare reach,
+   but all later non-winning draws are tsumogiri.
+2. If a yakuman route is genuinely close and still feasible with the remaining
+   balls, override the public baseline and chase it.
+3. If an ordinary tenpai exists, keep it unless a nearby yakuman route has a
+   clearly better value. Low-ball ordinary tenpai declares reach.
+4. Otherwise, let the public suit/dragon heuristic handle honitsu-ish hands.
+5. Area decisions include fourth-copy protection: a tile already held as three
    copies is not just dead, because drawing it refunds one ball.
 
 ## Route gates
@@ -25,6 +27,17 @@ The prototype considers:
 - Kokushi: missing at most four terminal/honor requirements.
 - Honitsu: detected but currently left to the public baseline for final action,
   because hard honitsu discards reduced EV in simulation.
+
+## Tenpai handling
+
+- Yakuman tenpai is locked. Discard choice must leave the yakuman waits intact.
+  Declaring reach is allowed; breaking the tenpai is not.
+- Reach locks future discard behavior to drawn-tile discard until agari.
+- The first draw after reach is recorded as an ippatsu chance.
+- Ura-dora only counts for reached hands.
+- Ordinary tenpai declares reach when the remaining balls are low. With enough
+  balls, the strategy can still look for improvement, but it will not casually
+  dismantle a completed tenpai for a distant route.
 
 ## Current result
 

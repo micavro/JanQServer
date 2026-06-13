@@ -36,6 +36,9 @@ class ShotEvent:
 class TurnEvent:
     shot: ShotEvent
     discard: DiscardDecision
+    riichi_before: bool = False
+    riichi_declared: bool = False
+    ippatsu_chance: bool = False
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,10 @@ class SimulationResult:
     win: bool
     turns: tuple[TurnEvent, ...]
     final_hand: TileSet
+    riichi: bool = False
+    riichi_turn: int | None = None
+    double_riichi: bool = False
+    ippatsu_win: bool = False
 
     @property
     def shots(self) -> int:
@@ -59,6 +66,8 @@ def simulate_hand(
     choose_discard: ChooseDiscard = choose_greedy_discard,
     max_replays: int = 100,
     max_turns: int = 100,
+    dora_id: int | None = None,
+    ura_dora_id: int | None = None,
 ) -> SimulationResult:
     """Simulate one normal JanQ hand.
 
@@ -72,10 +81,22 @@ def simulate_hand(
         raise ValueError(f"initial_hand must have 13 tiles, got {hand.size}")
 
     turns: list[TurnEvent] = []
+    riichi_active = False
+    riichi_turn: int | None = None
+    shots_after_riichi = 0
     while balls > 0 and len(turns) < max_turns:
-        area_decision = _call_choose_area(choose_area, hand, table, balls)
+        area_decision = _call_choose_area(
+            choose_area,
+            hand,
+            table,
+            balls,
+            dora_id=dora_id,
+            ura_dora_id=ura_dora_id,
+            is_reach=riichi_active,
+        )
         balls_before = balls
         balls -= 1
+        ippatsu_chance = riichi_active and shots_after_riichi == 0
 
         replays = 0
         while True:
@@ -91,7 +112,16 @@ def simulate_hand(
         if fourth_copy:
             balls += 1
 
-        discard_decision = _call_choose_discard(choose_discard, hand, balls)
+        discard_decision = _call_choose_discard(
+            choose_discard,
+            hand,
+            balls,
+            dora_id=dora_id,
+            ura_dora_id=ura_dora_id,
+            is_reach=riichi_active,
+            turn=len(turns) + 1,
+            drawn_tile=tile_id,
+        )
         shot = ShotEvent(
             area=area_decision.area,
             tile_id=tile_id,
@@ -101,16 +131,47 @@ def simulate_hand(
             replays=replays,
             area_reason=area_decision.reason,
         )
-        turns.append(TurnEvent(shot=shot, discard=discard_decision))
+        riichi_declared = (not riichi_active) and discard_decision.declare_riichi
+        turns.append(
+            TurnEvent(
+                shot=shot,
+                discard=discard_decision,
+                riichi_before=riichi_active,
+                riichi_declared=riichi_declared,
+                ippatsu_chance=ippatsu_chance,
+            )
+        )
 
         if discard_decision.is_agari:
-            return SimulationResult(win=True, turns=tuple(turns), final_hand=hand)
+            return SimulationResult(
+                win=True,
+                turns=tuple(turns),
+                final_hand=hand,
+                riichi=riichi_active,
+                riichi_turn=riichi_turn,
+                double_riichi=riichi_turn == 1,
+                ippatsu_win=ippatsu_chance,
+            )
 
         if discard_decision.discard_tile is None:
             raise RuntimeError("non-agari discard decision did not include a tile")
         hand = hand.with_removed_one(discard_decision.discard_tile)
+        if riichi_declared:
+            riichi_active = True
+            riichi_turn = len(turns)
+            shots_after_riichi = 0
+        elif riichi_active:
+            shots_after_riichi += 1
 
-    return SimulationResult(win=False, turns=tuple(turns), final_hand=hand)
+    return SimulationResult(
+        win=False,
+        turns=tuple(turns),
+        final_hand=hand,
+        riichi=riichi_active,
+        riichi_turn=riichi_turn,
+        double_riichi=riichi_turn == 1,
+        ippatsu_win=False,
+    )
 
 
 def random_initial_hand(rng: random.Random | None = None) -> TileSet:
@@ -122,7 +183,20 @@ def _call_choose_area(
     hand: TileSet,
     table: NyukyuTable,
     balls: int,
+    *,
+    dora_id: int | None = None,
+    ura_dora_id: int | None = None,
+    is_reach: bool = False,
 ) -> AreaDecision:
+    if getattr(choose_area, "uses_full_context", False):
+        return choose_area(
+            hand,
+            table,
+            balls,
+            dora_id=dora_id,
+            ura_dora_id=ura_dora_id,
+            is_reach=is_reach,
+        )
     if getattr(choose_area, "uses_context", False):
         return choose_area(hand, table, balls)
     return choose_area(hand, table)
@@ -132,7 +206,23 @@ def _call_choose_discard(
     choose_discard: ChooseDiscard,
     hand: TileSet,
     balls: int,
+    *,
+    dora_id: int | None = None,
+    ura_dora_id: int | None = None,
+    is_reach: bool = False,
+    turn: int | None = None,
+    drawn_tile: int | None = None,
 ) -> DiscardDecision:
+    if getattr(choose_discard, "uses_full_context", False):
+        return choose_discard(
+            hand,
+            balls,
+            dora_id=dora_id,
+            ura_dora_id=ura_dora_id,
+            is_reach=is_reach,
+            turn=turn,
+            drawn_tile=drawn_tile,
+        )
     if getattr(choose_discard, "uses_context", False):
         return choose_discard(hand, balls)
     return choose_discard(hand)
