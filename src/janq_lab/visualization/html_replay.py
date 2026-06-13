@@ -474,12 +474,6 @@ def _asset_css(assets: TileImageAssets) -> str:
   text-shadow: none;
 }
 
-.tile.tile-art.discarded,
-.mini-tile.tile-art.discarded {
-  border-color: #d55050;
-  box-shadow: 0 0 0 2px rgba(197, 73, 73, 0.28);
-  filter: saturate(1.08) brightness(0.96);
-}
 """
     ]
     for tile_id, url in enumerate(assets.tile_urls):
@@ -693,11 +687,10 @@ def _turn_hand_flow(turn: ReplayTurn) -> str:
 <div class="hand-flow">
   <div class="flow-hand">
     <span>手牌 13张</span>
-    <div class="tiles small">{_tiles_html(turn.hand_before, discard_tile=hand_discard)}</div>
-  </div>
-  <div class="flow-draw">
-    <span>摸到第14张</span>
-    <div class="{drawn_classes}">{_tile_html(turn.drawn_tile, discarded=drawn_discarded)}</div>
+    <div class="hand-row">
+      <div class="tiles small hand-tiles">{_tiles_html(turn.hand_before, discard_tile=hand_discard)}</div>
+      <div class="{drawn_classes}" title="摸到第14张">{_tile_html(turn.drawn_tile, discarded=drawn_discarded)}</div>
+    </div>
   </div>
 </div>
 """
@@ -1239,9 +1232,10 @@ h1 {
 }
 
 .tile.discarded {
-  border-color: var(--red);
-  background: #fff1f1;
-  box-shadow: 0 0 0 2px rgba(197, 73, 73, 0.18);
+  position: relative;
+  z-index: 2;
+  transform: translateY(-68%);
+  transition: transform 140ms ease;
 }
 
 .turn-list {
@@ -1450,39 +1444,47 @@ h1 {
 }
 
 .hand-flow {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 84px;
-  gap: 10px;
   margin-top: 12px;
 }
 
-.flow-hand,
-.flow-draw {
+.flow-hand {
   min-width: 0;
-  padding: 10px;
+  padding: 10px 10px 14px;
   border-radius: 8px;
   background: #f7f9f9;
   border: 1px solid var(--line);
 }
 
-.flow-hand > span,
-.flow-draw > span {
+.flow-hand > span {
   display: block;
   color: var(--muted);
   font-size: 12px;
   margin-bottom: 7px;
 }
 
-.flow-draw {
+.hand-row {
   display: flex;
-  flex-direction: column;
-  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: flex-end;
+  padding-top: 28px;
 }
 
-.drawn-tile.discarded {
-  padding: 3px;
-  border-radius: 8px;
-  background: #fff1f1;
+.hand-tiles {
+  flex: 0 1 auto;
+}
+
+.drawn-tile {
+  display: inline-flex;
+  align-items: flex-end;
+  margin-left: 34px;
+}
+
+.drawn-tile .tile {
+  width: 28px;
+  height: 38px;
+  font-size: 12px;
+  border-radius: 5px;
 }
 
 .empty-state {
