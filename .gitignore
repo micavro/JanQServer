@@ -10,6 +10,7 @@ bin/
 obj/
 *.egg-info/
 _runtime/
+allresourse/
 
 # Local copied game/runtime artifacts
 sega_net_MJ/

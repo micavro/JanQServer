@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 import argparse
+import base64
+from io import BytesIO
 import json
+import os
 import random
 from typing import Callable
 
@@ -27,7 +30,7 @@ from janq_lab.strategy.greedy import (
 )
 from janq_lab.strategy.public import choose_public_area, choose_public_discard
 from janq_lab.strategy.route_ev import choose_route_ev_area, choose_route_ev_discard
-from janq_lab.tiles import TILE_NAMES, tile_name
+from janq_lab.tiles import TILE_COUNT, TILE_NAMES, tile_name
 
 
 ChooseArea = Callable[..., AreaDecision]
@@ -74,6 +77,54 @@ class ReplaySet:
     source_label: str
     table_name: str
     observed_hand_count: int = 0
+
+
+@dataclass(frozen=True)
+class TileImageAssets:
+    tile_urls: tuple[str | None, ...]
+    source_label: str
+
+    @property
+    def available(self) -> bool:
+        return any(self.tile_urls)
+
+
+TILE_ATLAS_BOXES: tuple[tuple[int, int, int, int], ...] = (
+    (22, 18, 130, 166),
+    (145, 20, 253, 166),
+    (268, 18, 376, 166),
+    (391, 16, 499, 166),
+    (505, 10, 632, 166),
+    (760, 10, 885, 166),
+    (885, 10, 1005, 166),
+    (20, 178, 130, 340),
+    (145, 176, 255, 340),
+    (510, 342, 635, 510),
+    (635, 342, 755, 510),
+    (755, 342, 885, 510),
+    (20, 512, 135, 680),
+    (140, 512, 260, 680),
+    (265, 512, 382, 680),
+    (385, 512, 510, 680),
+    (510, 512, 635, 680),
+    (635, 512, 755, 680),
+    (260, 178, 386, 340),
+    (395, 178, 490, 340),
+    (510, 178, 632, 340),
+    (630, 178, 755, 340),
+    (755, 178, 884, 340),
+    (20, 342, 135, 510),
+    (140, 342, 260, 510),
+    (265, 342, 382, 510),
+    (385, 342, 510, 510),
+    (755, 512, 885, 680),
+    (865, 512, 1000, 680),
+    (20, 690, 135, 835),
+    (140, 690, 260, 835),
+    (640, 690, 755, 835),
+    (390, 690, 510, 835),
+    (510, 690, 635, 835),
+)
 
 
 def simulate_replay(
@@ -252,7 +303,12 @@ def simulate_replay_set(
     )
 
 
-def render_replay_html(replay: ReplayHand) -> str:
+def render_replay_html(
+    replay: ReplayHand,
+    *,
+    resource_dir: str | Path | None = None,
+    output_path: str | Path | None = None,
+) -> str:
     return render_replay_set_html(
         ReplaySet(
             seed=replay.seed,
@@ -261,12 +317,20 @@ def render_replay_html(replay: ReplayHand) -> str:
             source_label=replay.source_label,
             table_name="nyukyu_base_table.bytes",
             observed_hand_count=0,
-        )
+        ),
+        resource_dir=resource_dir,
+        output_path=output_path,
     )
 
 
-def render_replay_set_html(replay_set: ReplaySet) -> str:
+def render_replay_set_html(
+    replay_set: ReplaySet,
+    *,
+    resource_dir: str | Path | None = None,
+    output_path: str | Path | None = None,
+) -> str:
     table = load_tables()[replay_set.table_name]
+    assets = discover_tile_image_assets(resource_dir=resource_dir, output_path=output_path)
     title = f"JanQ replay dashboard seed {replay_set.seed}"
     return "\n".join(
         (
@@ -276,11 +340,11 @@ def render_replay_set_html(replay_set: ReplaySet) -> str:
             '<meta charset="utf-8">',
             '<meta name="viewport" content="width=device-width, initial-scale=1">',
             f"<title>{escape(title)}</title>",
-            f"<style>{_CSS}</style>",
+            f"<style>{_CSS}{_asset_css(assets)}</style>",
             "</head>",
             "<body>",
             '<main class="shell">',
-            _render_header(replay_set),
+            _render_header(replay_set, assets),
             _render_strategy_note(replay_set.strategy),
             '<section class="workspace">',
             _render_example_list(replay_set),
@@ -299,21 +363,134 @@ def render_replay_set_html(replay_set: ReplaySet) -> str:
     )
 
 
-def write_replay_html(replay: ReplayHand, output: str | Path) -> Path:
+def write_replay_html(
+    replay: ReplayHand,
+    output: str | Path,
+    *,
+    resource_dir: str | Path | None = None,
+) -> Path:
     path = Path(output)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_replay_html(replay), encoding="utf-8")
+    path.write_text(
+        render_replay_html(replay, resource_dir=resource_dir, output_path=path),
+        encoding="utf-8",
+    )
     return path
 
 
-def write_replay_set_html(replay_set: ReplaySet, output: str | Path) -> Path:
+def write_replay_set_html(
+    replay_set: ReplaySet,
+    output: str | Path,
+    *,
+    resource_dir: str | Path | None = None,
+) -> Path:
     path = Path(output)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_replay_set_html(replay_set), encoding="utf-8")
+    path.write_text(
+        render_replay_set_html(replay_set, resource_dir=resource_dir, output_path=path),
+        encoding="utf-8",
+    )
     return path
 
 
-def _render_header(replay_set: ReplaySet) -> str:
+def discover_tile_image_assets(
+    *,
+    resource_dir: str | Path | None = None,
+    output_path: str | Path | None = None,
+) -> TileImageAssets:
+    resource_path = _resolve_resource_dir(resource_dir, output_path)
+    if resource_path is None:
+        return TileImageAssets((None,) * TILE_COUNT, "CSS文字牌")
+
+    atlas_path = resource_path / "color00.png"
+    if not atlas_path.is_file():
+        return TileImageAssets((None,) * TILE_COUNT, f"未找到 {atlas_path.name}")
+
+    try:
+        from PIL import Image
+    except Exception:
+        return TileImageAssets((None,) * TILE_COUNT, "Pillow不可用，使用CSS文字牌")
+
+    try:
+        with Image.open(atlas_path) as atlas:
+            image = atlas.convert("RGBA")
+            urls = tuple(_crop_tile_data_url(image, box) for box in TILE_ATLAS_BOXES)
+    except Exception as exc:
+        return TileImageAssets((None,) * TILE_COUNT, f"{atlas_path.name}读取失败：{exc}")
+
+    if len(urls) != TILE_COUNT:
+        return TileImageAssets((None,) * TILE_COUNT, "牌图数量不完整")
+    return TileImageAssets(urls, f"{atlas_path.as_posix()} / color00")
+
+
+def _resolve_resource_dir(
+    resource_dir: str | Path | None,
+    output_path: str | Path | None,
+) -> Path | None:
+    candidates: list[Path] = []
+    if resource_dir is not None:
+        candidates.append(Path(resource_dir))
+    env_dir = os.environ.get("JANQ_RESOURCE_DIR")
+    if env_dir:
+        candidates.append(Path(env_dir))
+    if output_path is not None:
+        out = Path(output_path).resolve()
+        candidates.extend(parent / "allresourse" for parent in (out.parent, *out.parents))
+    cwd = Path.cwd().resolve()
+    candidates.extend(parent / "allresourse" for parent in (cwd, *cwd.parents))
+
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if resolved.is_dir():
+            return resolved
+    return None
+
+
+def _crop_tile_data_url(image: object, box: tuple[int, int, int, int]) -> str:
+    crop = image.crop(box)  # type: ignore[attr-defined]
+    buffer = BytesIO()
+    crop.save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _asset_css(assets: TileImageAssets) -> str:
+    if not assets.available:
+        return ""
+    rules = [
+        """
+.tile.tile-art,
+.mini-tile.tile-art {
+  background-color: transparent;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  border-color: transparent;
+  box-shadow: none;
+  color: transparent;
+  text-shadow: none;
+}
+
+.tile.tile-art.discarded,
+.mini-tile.tile-art.discarded {
+  border-color: #d55050;
+  box-shadow: 0 0 0 2px rgba(197, 73, 73, 0.28);
+  filter: saturate(1.08) brightness(0.96);
+}
+"""
+    ]
+    for tile_id, url in enumerate(assets.tile_urls):
+        if url is None:
+            continue
+        safe_url = url.replace(")", "%29")
+        rules.append(f".tile-id-{tile_id} {{ background-image: url({safe_url}); }}")
+    return "\n".join(rules)
+
+
+def _render_header(replay_set: ReplaySet, assets: TileImageAssets) -> str:
     wins = sum(1 for replay in replay_set.replays if replay.win)
     yakuman = sum(
         1
@@ -326,7 +503,7 @@ def _render_header(replay_set: ReplaySet) -> str:
     <p class="eyebrow">JanQ Offline Replay Dashboard</p>
     <h1>当前策略：{escape(replay_set.strategy)}</h1>
     <p class="subtle">seed={replay_set.seed} · 样本={len(replay_set.replays)} · 胜局={wins} · 役满={yakuman}</p>
-    <p class="source">{escape(replay_set.source_label)} · 概率表={escape(replay_set.table_name)}</p>
+    <p class="source">{escape(replay_set.source_label)} · 概率表={escape(replay_set.table_name)} · 牌图={escape(assets.source_label)}</p>
   </div>
   <div class="stat-strip">
     <span><b>{len(replay_set.replays)}</b> 起手</span>
@@ -480,11 +657,7 @@ def _render_turn(turn: ReplayTurn, table: NyukyuTable) -> str:
     <div><dt>舍牌理由</dt><dd>{escape(discard.reason)}</dd></div>
     <div><dt>舍后受入</dt><dd>{escape(accepts)}</dd></div>
   </dl>
-  <div class="hand-columns">
-    {_compact_hand("摸前", turn.hand_before)}
-    {_compact_hand("摸后", turn.hand_after_draw)}
-    {_compact_hand("弃后", turn.hand_after_discard)}
-  </div>
+  {_turn_hand_flow(turn)}
 </article>
 """
 
@@ -507,6 +680,38 @@ def _compact_hand(title: str, tiles: tuple[int, ...]) -> str:
   <div class="tiles small">{''.join(_tile_html(tile_id) for tile_id in tiles)}</div>
 </div>
 """
+
+
+def _turn_hand_flow(turn: ReplayTurn) -> str:
+    discard_tile = turn.discard_decision.discard_tile
+    hand_discard = None if discard_tile == turn.drawn_tile else discard_tile
+    drawn_discarded = discard_tile == turn.drawn_tile
+    drawn_classes = "drawn-tile"
+    if drawn_discarded:
+        drawn_classes += " discarded"
+    return f"""
+<div class="hand-flow">
+  <div class="flow-hand">
+    <span>手牌 13张</span>
+    <div class="tiles small">{_tiles_html(turn.hand_before, discard_tile=hand_discard)}</div>
+  </div>
+  <div class="flow-draw">
+    <span>摸到第14张</span>
+    <div class="{drawn_classes}">{_tile_html(turn.drawn_tile, discarded=drawn_discarded)}</div>
+  </div>
+</div>
+"""
+
+
+def _tiles_html(tiles: tuple[int, ...], *, discard_tile: int | None = None) -> str:
+    used_discard = False
+    rendered = []
+    for tile_id in tiles:
+        discarded = discard_tile is not None and not used_discard and tile_id == discard_tile
+        if discarded:
+            used_discard = True
+        rendered.append(_tile_html(tile_id, discarded=discarded))
+    return "".join(rendered)
 
 
 def _area_probability_data(
@@ -592,17 +797,22 @@ def _score_text(score: JanqScore | None) -> str:
     return f"{score.han}番 · {yaku}"
 
 
-def _tile_html(tile_id: int | None) -> str:
+def _tile_html(tile_id: int | None, *, discarded: bool = False) -> str:
     if tile_id is None:
         return '<span class="tile empty">-</span>'
+    discarded_class = " discarded" if discarded else ""
     return (
-        f'<span class="tile {_tile_class(tile_id)}" title="{escape(tile_name(tile_id))}">'
+        f'<span class="tile tile-art tile-id-{tile_id} {_tile_class(tile_id)}{discarded_class}" '
+        f'title="{escape(tile_name(tile_id))}">'
         f"{escape(_tile_label(tile_id))}</span>"
     )
 
 
 def _mini_tile_html(tile_id: int) -> str:
-    return f'<span class="mini-tile {_tile_class(tile_id)}">{escape(_tile_label(tile_id))}</span>'
+    return (
+        f'<span class="mini-tile tile-art tile-id-{tile_id} {_tile_class(tile_id)}">'
+        f"{escape(_tile_label(tile_id))}</span>"
+    )
 
 
 def _tile_class(tile_id: int) -> str:
@@ -659,6 +869,10 @@ def main(argv: list[str] | None = None) -> None:
         default=str(Path("_runtime") / "logs" / "janq_events.jsonl"),
         help="Probe JSONL path used by --source observed/auto.",
     )
+    parser.add_argument(
+        "--resource-dir",
+        help="Directory containing copied JanQ resources, for example allresourse.",
+    )
     parser.add_argument("--output", help="Output HTML path")
     args = parser.parse_args(argv)
 
@@ -672,7 +886,7 @@ def main(argv: list[str] | None = None) -> None:
         events_path=args.events_path,
     )
     output = Path(args.output) if args.output else _default_output(args.seed, args.strategy, args.examples)
-    path = write_replay_set_html(replay_set, output)
+    path = write_replay_set_html(replay_set, output, resource_dir=args.resource_dir)
     print(path)
 
 
@@ -1024,6 +1238,12 @@ h1 {
   color: #1a1f1e;
 }
 
+.tile.discarded {
+  border-color: var(--red);
+  background: #fff1f1;
+  box-shadow: 0 0 0 2px rgba(197, 73, 73, 0.18);
+}
+
 .turn-list {
   display: grid;
   gap: 14px;
@@ -1115,46 +1335,49 @@ h1 {
 }
 
 .probability-table {
-  max-height: 245px;
+  max-height: 210px;
   overflow: auto;
+  padding: 10px;
 }
 
-.probability-table table {
-  width: 100%;
-  border-collapse: collapse;
+.prob-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.prob-chip {
+  display: inline-flex;
+  gap: 5px;
+  align-items: baseline;
+  min-height: 26px;
+  padding: 4px 7px;
+  border: 1px solid #dfe6e4;
+  border-radius: 6px;
+  background: #ffffff;
   font-size: 12px;
-}
-
-.probability-table th,
-.probability-table td {
-  padding: 6px 8px;
-  border-bottom: 1px solid #edf1f0;
-  text-align: right;
+  line-height: 1;
   white-space: nowrap;
 }
 
-.probability-table th:first-child,
-.probability-table td:first-child,
-.probability-table th:last-child,
-.probability-table td:last-child {
-  text-align: left;
+.prob-chip b {
+  color: var(--ink);
+  font-weight: 800;
 }
 
-.probability-table th {
-  position: sticky;
-  top: 0;
-  background: #f5f7f8;
-  color: #44504e;
-  z-index: 1;
+.prob-separator {
+  color: var(--muted);
 }
 
-.probability-table .blocked {
-  color: #a0a8a6;
-  background: #fafafa;
+.prob-chip.protect {
+  border-color: #eccd88;
+  background: #fff8e8;
 }
 
-.probability-table .protect {
-  background: #fff7e6;
+.prob-empty {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .turn-grid {
@@ -1226,6 +1449,42 @@ h1 {
   margin-bottom: 7px;
 }
 
+.hand-flow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 84px;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.flow-hand,
+.flow-draw {
+  min-width: 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: #f7f9f9;
+  border: 1px solid var(--line);
+}
+
+.flow-hand > span,
+.flow-draw > span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 7px;
+}
+
+.flow-draw {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.drawn-tile.discarded {
+  padding: 3px;
+  border-radius: 8px;
+  background: #fff1f1;
+}
+
 .empty-state {
   margin-top: 14px;
   padding: 18px;
@@ -1263,7 +1522,8 @@ h1 {
   .area-bar,
   .turn-grid,
   .reason-list,
-  .hand-columns {
+  .hand-columns,
+  .hand-flow {
     grid-template-columns: 1fr;
   }
 }
@@ -1300,34 +1560,16 @@ function showArea(button) {
 }
 
 function renderProbabilityTable(area, rows) {
-  const body = rows.map((row) => {
-    const classes = [
-      row.blocked ? 'blocked' : '',
-      row.protect ? 'protect' : '',
-    ].filter(Boolean).join(' ');
-    const note = row.blocked ? '已满4枚' : (row.protect ? '抽到保护+1球' : '');
-    return `<tr class="${classes}">
-      <td><span class="${escapeHtml(row.className)}">${escapeHtml(row.tile)}</span></td>
-      <td>${row.count}</td>
-      <td>${row.weight}</td>
-      <td>${formatPercent(row.raw)}</td>
-      <td>${formatPercent(row.effective)}</td>
-      <td>${escapeHtml(note)}</td>
-    </tr>`;
+  const visible = rows.filter((row) => Number(row.effective) > 0);
+  if (!visible.length) {
+    return '<div class="prob-empty">无有效牌</div>';
+  }
+  const body = visible.map((row) => {
+    const classes = ['prob-chip', row.protect ? 'protect' : ''].filter(Boolean).join(' ');
+    const tileClass = escapeHtml(row.className || '');
+    return `<span class="${classes}"><span class="${tileClass}">${escapeHtml(row.tile)}</span><span class="prob-separator">-</span><b>${formatPercent(row.effective)}</b></span>`;
   }).join('');
-  return `<table aria-label="区域 ${area} 概率表">
-    <thead>
-      <tr>
-        <th>牌</th>
-        <th>手中</th>
-        <th>权重</th>
-        <th>原始</th>
-        <th>有效</th>
-        <th>备注</th>
-      </tr>
-    </thead>
-    <tbody>${body}</tbody>
-  </table>`;
+  return `<div class="prob-chip-list" aria-label="区域 ${area} 概率">${body}</div>`;
 }
 
 function formatPercent(value) {
