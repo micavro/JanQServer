@@ -52,6 +52,24 @@ class HtmlReplayTests(unittest.TestCase):
         self.assertIn('data-area="4"', html)
         self.assertIn("区域概率", html)
 
+    def test_render_html_can_include_review_controls(self):
+        replay_set = simulate_replay_set(
+            seed=31,
+            strategy="route_ev",
+            examples=2,
+            max_turns=1,
+            include_bonus=False,
+        )
+
+        html = render_replay_set_html(replay_set, review_ui=True)
+
+        self.assertIn('class="panel review-toolbar"', html)
+        self.assertIn('id="promptOutput"', html)
+        self.assertIn("initReviewUi", html)
+        self.assertIn("janq-sim-review-v1", html)
+        self.assertIn('data-shot-area="', html)
+        self.assertIn('data-hand-before="', html)
+
     def test_bonus_replay_matches_economy_simulation(self):
         replay_set = simulate_replay_set(
             seed=91,

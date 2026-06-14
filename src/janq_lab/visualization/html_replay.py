@@ -563,6 +563,7 @@ def render_replay_html(
     *,
     resource_dir: str | Path | None = None,
     output_path: str | Path | None = None,
+    review_ui: bool = False,
 ) -> str:
     return render_replay_set_html(
         ReplaySet(
@@ -575,6 +576,7 @@ def render_replay_html(
         ),
         resource_dir=resource_dir,
         output_path=output_path,
+        review_ui=review_ui,
     )
 
 
@@ -583,11 +585,14 @@ def render_replay_set_html(
     *,
     resource_dir: str | Path | None = None,
     output_path: str | Path | None = None,
+    review_ui: bool = False,
 ) -> str:
     tables = load_tables()
     table = tables[replay_set.table_name]
     assets = discover_tile_image_assets(resource_dir=resource_dir, output_path=output_path)
     title = f"JanQ replay dashboard seed {replay_set.seed}"
+    css = f"{_CSS}{_asset_css(assets)}{_REVIEW_UI_CSS if review_ui else ''}"
+    script = f"{_JS}{_REVIEW_UI_JS if review_ui else ''}"
     return "\n".join(
         (
             "<!doctype html>",
@@ -596,13 +601,14 @@ def render_replay_set_html(
             '<meta charset="utf-8">',
             '<meta name="viewport" content="width=device-width, initial-scale=1">',
             f"<title>{escape(title)}</title>",
-            f"<style>{_CSS}{_asset_css(assets)}</style>",
+            f"<style>{css}</style>",
             "</head>",
             "<body>",
             '<main class="shell">',
             _render_header(replay_set, assets),
             _render_economy_summary(replay_set),
             _render_strategy_note(replay_set.strategy),
+            _render_review_toolbar() if review_ui else "",
             '<section class="workspace">',
             _render_example_list(replay_set),
             '<div class="replay-stage">',
@@ -612,8 +618,9 @@ def render_replay_set_html(
             ),
             "</div>",
             "</section>",
+            _render_review_prompt_section() if review_ui else "",
             "</main>",
-            f"<script>{_JS}</script>",
+            f"<script>{script}</script>",
             "</body>",
             "</html>",
         )
@@ -625,11 +632,17 @@ def write_replay_html(
     output: str | Path,
     *,
     resource_dir: str | Path | None = None,
+    review_ui: bool = False,
 ) -> Path:
     path = Path(output)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        render_replay_html(replay, resource_dir=resource_dir, output_path=path),
+        render_replay_html(
+            replay,
+            resource_dir=resource_dir,
+            output_path=path,
+            review_ui=review_ui,
+        ),
         encoding="utf-8",
     )
     return path
@@ -640,11 +653,17 @@ def write_replay_set_html(
     output: str | Path,
     *,
     resource_dir: str | Path | None = None,
+    review_ui: bool = False,
 ) -> Path:
     path = Path(output)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        render_replay_set_html(replay_set, resource_dir=resource_dir, output_path=path),
+        render_replay_set_html(
+            replay_set,
+            resource_dir=resource_dir,
+            output_path=path,
+            review_ui=review_ui,
+        ),
         encoding="utf-8",
     )
     return path
@@ -871,6 +890,58 @@ def _render_strategy_note(strategy: str) -> str:
 """
 
 
+def _render_review_toolbar() -> str:
+    return """
+<section class="panel review-toolbar">
+  <div class="review-progress">
+    <div class="review-progress-line">
+      <b id="reviewProgressText">已审核 0 / 0</b>
+      <span id="reviewIssueCount">不赞同 0 · 有疑问 0</span>
+    </div>
+    <div class="progress-track"><span id="reviewProgressFill"></span></div>
+  </div>
+  <div class="review-toolbar-actions">
+    <label>
+      决策
+      <select id="actionFilter" aria-label="决策筛选">
+        <option value="all">全部</option>
+        <option value="shot">发射</option>
+        <option value="discard">弃牌/立直</option>
+      </select>
+    </label>
+    <label>
+      审核
+      <select id="reviewFilter" aria-label="审核筛选">
+        <option value="all">全部</option>
+        <option value="pending">未审核</option>
+        <option value="agree">赞同</option>
+        <option value="question">有疑问</option>
+        <option value="disagree">不赞同</option>
+      </select>
+    </label>
+    <button type="button" class="command-button" id="nextUnreviewed">下一个未审核</button>
+    <button type="button" class="command-button primary" id="generatePrompt">生成修正文本</button>
+  </div>
+</section>
+"""
+
+
+def _render_review_prompt_section() -> str:
+    return """
+<section class="prompt-section" id="promptSection">
+  <div class="prompt-head">
+    <div>
+      <p class="eyebrow">Strategy Revision</p>
+      <h2>策略修正文本</h2>
+      <p class="subtle" id="promptSummary">尚未生成</p>
+    </div>
+    <button type="button" class="command-button" id="copyPrompt">复制</button>
+  </div>
+  <textarea id="promptOutput" spellcheck="false"></textarea>
+</section>
+"""
+
+
 def _render_example_list(replay_set: ReplaySet) -> str:
     buttons = []
     for index, replay in enumerate(replay_set.replays):
@@ -1054,9 +1125,20 @@ def _render_turn(turn: ReplayTurn, table: NyukyuTable) -> str:
     accepts = ", ".join(_tile_label(tile_id) for tile_id in discard.accepts) or "无"
     targets = ", ".join(_tile_label(tile_id) for tile_id in turn.area_decision.target_tiles) or "无"
     probability_data = _json_script(_area_probability_data(turn.hand_before, table))
+    hand_before = _tile_refs(turn.hand_before)
+    hand_after_draw = _tile_refs((*turn.hand_before, turn.drawn_tile))
+    drawn_tile = _tile_ref(turn.drawn_tile)
+    discarded_tile = "" if discard.is_agari else _tile_ref(discard.discard_tile)
 
     return f"""
-<article class="turn">
+<article class="turn" data-turn-number="{turn.turn}" data-balls-before="{turn.balls_before}"
+  data-balls-after="{turn.balls_after_draw}" data-shot-area="{turn.area_decision.area}"
+  data-shot-reason="{escape(turn.area_decision.reason)}" data-shot-targets="{escape(targets)}"
+  data-shot-target-weight="{turn.area_decision.target_weight}"
+  data-discard-choice="{escape(discard_text)}" data-discard-reason="{escape(discard.reason)}"
+  data-discard-accepts="{escape(accepts)}" data-riichi="{str(discard.declare_riichi).lower()}"
+  data-drawn-tile="{escape(drawn_tile)}" data-discarded-tile="{escape(discarded_tile)}"
+  data-hand-before="{escape(hand_before)}" data-hand-after-draw="{escape(hand_after_draw)}">
   <div class="turn-head">
     <div>
       <h3>第 {turn.turn} 球</h3>
@@ -1109,6 +1191,14 @@ def _render_turn(turn: ReplayTurn, table: NyukyuTable) -> str:
   {_turn_hand_flow(turn)}
 </article>
 """
+
+
+def _tile_ref(tile_id: int) -> str:
+    return f"{_tile_label(tile_id)}(id={tile_id})"
+
+
+def _tile_refs(tiles: tuple[int, ...]) -> str:
+    return " ".join(_tile_ref(tile_id) for tile_id in tiles)
 
 
 def _area_bar(
@@ -1402,6 +1492,11 @@ def main(argv: list[str] | None = None) -> None:
         "--resource-dir",
         help="Directory containing copied JanQ resources, for example allresourse.",
     )
+    parser.add_argument(
+        "--review-ui",
+        action="store_true",
+        help="Add approval controls and strategy-revision prompt export.",
+    )
     parser.add_argument("--output", help="Output HTML path")
     args = parser.parse_args(argv)
 
@@ -1419,7 +1514,12 @@ def main(argv: list[str] | None = None) -> None:
         max_bonus_hands=args.max_bonus_hands,
     )
     output = Path(args.output) if args.output else _default_output(args.seed, args.strategy, args.examples)
-    path = write_replay_set_html(replay_set, output, resource_dir=args.resource_dir)
+    path = write_replay_set_html(
+        replay_set,
+        output,
+        resource_dir=args.resource_dir,
+        review_ui=args.review_ui,
+    )
     print(path)
 
 
@@ -2260,6 +2360,258 @@ h1 {
 """
 
 
+_REVIEW_UI_CSS = r"""
+.review-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.review-progress {
+  flex: 1;
+  min-width: 240px;
+}
+
+.review-progress-line,
+.review-toolbar-actions,
+.prompt-head,
+.decision-review-head,
+.decision-review-actions,
+.feedback-fields {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.review-progress-line {
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: var(--muted);
+}
+
+.progress-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e4ecea;
+}
+
+.progress-track span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--teal);
+  transition: width .18s ease;
+}
+
+.review-toolbar-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.review-toolbar label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.review-toolbar select {
+  min-width: 112px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  padding: 8px 10px;
+  font: inherit;
+}
+
+.command-button {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.command-button.primary {
+  border-color: var(--teal);
+  background: var(--teal);
+  color: #fff;
+}
+
+.review-stack {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.decision-review {
+  border: 1px solid var(--line);
+  border-left: 4px solid #cbd7d5;
+  border-radius: 8px;
+  background: #fbfdfc;
+  padding: 12px;
+}
+
+.decision-review[data-verdict="agree"] {
+  border-left-color: var(--green);
+}
+
+.decision-review[data-verdict="question"] {
+  border-left-color: var(--amber);
+}
+
+.decision-review[data-verdict="disagree"] {
+  border-left-color: var(--red);
+}
+
+.decision-review-head {
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+
+.decision-review-head h4 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.decision-review-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.review-state-pill {
+  display: inline-flex;
+  min-width: 64px;
+  justify-content: center;
+  border-radius: 999px;
+  background: #edf2f1;
+  color: var(--muted);
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.review-state-pill.agree {
+  background: #e5f4ea;
+  color: var(--green);
+}
+
+.review-state-pill.question {
+  background: #fff3dc;
+  color: #9a6100;
+}
+
+.review-state-pill.disagree {
+  background: #fae8e8;
+  color: var(--red);
+}
+
+.decision-review-actions {
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.verdict-button {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
+.verdict-button.active {
+  border-color: var(--teal);
+  background: #eaf7f4;
+  color: var(--teal-dark);
+  font-weight: 700;
+}
+
+.feedback-fields {
+  align-items: stretch;
+}
+
+.feedback-fields label {
+  flex: 1;
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.feedback-fields textarea,
+#promptOutput {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  padding: 9px 10px;
+  font: 13px/1.5 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+.feedback-fields textarea {
+  min-height: 62px;
+}
+
+.prompt-section {
+  margin-top: 14px;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  box-shadow: var(--shadow);
+}
+
+.prompt-head {
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.prompt-head h2 {
+  margin-bottom: 4px;
+}
+
+#promptOutput {
+  min-height: 260px;
+  font-family: Consolas, "Microsoft YaHei", monospace;
+}
+
+.decision-review.review-hidden,
+.turn.review-hidden {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .review-toolbar,
+  .review-toolbar-actions,
+  .decision-review-head,
+  .feedback-fields,
+  .prompt-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+"""
+
+
 _JS = r"""
 function showReplay(index) {
   document.querySelectorAll('.example-button').forEach((button) => {
@@ -2322,6 +2674,295 @@ document.querySelectorAll('.turn').forEach((turn) => {
   }
 });
 showReplay(0);
+"""
+
+
+_REVIEW_UI_JS = r"""
+(function initReviewUi() {
+  const toolbar = document.querySelector('.review-toolbar');
+  if (!toolbar) {
+    return;
+  }
+
+  const storageKey = `janq-sim-review-v1:${location.pathname}:${document.title}`;
+  let reviews = loadReviews();
+  const labels = {
+    pending: '未审核',
+    agree: '赞同',
+    question: '有疑问',
+    disagree: '不赞同',
+  };
+
+  function loadReviews() {
+    try {
+      return JSON.parse(localStorage.getItem(storageKey) || '{}');
+    } catch (_error) {
+      return {};
+    }
+  }
+
+  function saveReviews() {
+    localStorage.setItem(storageKey, JSON.stringify(reviews));
+  }
+
+  function reviewFor(id) {
+    return reviews[id] || { verdict: 'pending', reason: '', alternative: '' };
+  }
+
+  function replayNumber(card) {
+    return Number(card?.dataset.replayIndex || 0) + 1;
+  }
+
+  function decisionId(turn, action) {
+    const card = turn.closest('.replay-card');
+    return `sim:r${card?.dataset.replayIndex || 0}:t${turn.dataset.reviewTurnIndex}:${action}`;
+  }
+
+  function ensureReviewPanels() {
+    document.querySelectorAll('.replay-card').forEach((card) => {
+      card.querySelectorAll('.turn').forEach((turn, index) => {
+        if (turn.querySelector('.review-stack')) {
+          return;
+        }
+        turn.dataset.reviewTurnIndex = String(index + 1);
+        const shotId = decisionId(turn, 'shot');
+        const discardId = decisionId(turn, 'discard');
+        const stack = document.createElement('section');
+        stack.className = 'review-stack';
+        stack.innerHTML = [
+          renderDecisionPanel(
+            shotId,
+            'shot',
+            '发射区域决策',
+            `区域 ${turn.dataset.shotArea || '-'} · ${turn.dataset.shotReason || ''}`,
+            shotDetails(turn, card),
+          ),
+          renderDecisionPanel(
+            discardId,
+            'discard',
+            '弃牌/立直决策',
+            `${turn.dataset.discardChoice || '-'} · ${turn.dataset.discardReason || ''}`,
+            discardDetails(turn, card),
+          ),
+        ].join('');
+        turn.appendChild(stack);
+      });
+    });
+  }
+
+  function shotDetails(turn, card) {
+    return [
+      `样本 #${replayNumber(card)} · 第 ${turn.dataset.turnNumber || '?'} 球 · 球数 ${turn.dataset.ballsBefore || '?'} → ${turn.dataset.ballsAfter || '?'}`,
+      `目标牌：${turn.dataset.shotTargets || '-'}`,
+      `目标权重：${turn.dataset.shotTargetWeight || '-'} / 10000`,
+      `摸前手牌：${turn.dataset.handBefore || '-'}`,
+      `事件行：模拟生成，无真实日志行`,
+    ];
+  }
+
+  function discardDetails(turn, card) {
+    return [
+      `样本 #${replayNumber(card)} · 第 ${turn.dataset.turnNumber || '?'} 球 · 球数 ${turn.dataset.ballsBefore || '?'} → ${turn.dataset.ballsAfter || '?'}`,
+      `摸到：${turn.dataset.drawnTile || '-'}`,
+      `处理：${turn.dataset.discardChoice || '-'}${turn.dataset.riichi === 'true' ? '；本球宣告立直' : ''}`,
+      `舍后受入：${turn.dataset.discardAccepts || '-'}`,
+      `摸后手牌：${turn.dataset.handAfterDraw || '-'}`,
+      `事件行：模拟生成，无真实日志行`,
+    ];
+  }
+
+  function renderDecisionPanel(id, action, title, summary, details) {
+    const review = reviewFor(id);
+    return `<section class="decision-review" data-decision-id="${escapeHtml(id)}" data-action-type="${escapeHtml(action)}" data-verdict="${escapeHtml(review.verdict)}">
+      <div class="decision-review-head">
+        <div>
+          <h4>${escapeHtml(title)}</h4>
+          <p>${escapeHtml(summary)}</p>
+        </div>
+        <span class="review-state-pill ${escapeHtml(review.verdict)}">${escapeHtml(labels[review.verdict] || labels.pending)}</span>
+      </div>
+      <div class="decision-review-actions">
+        ${verdictButton('pending', review.verdict)}
+        ${verdictButton('agree', review.verdict)}
+        ${verdictButton('question', review.verdict)}
+        ${verdictButton('disagree', review.verdict)}
+      </div>
+      <div class="feedback-fields">
+        <label>理由
+          <textarea data-field="reason" placeholder="说明为什么不同意，或具体不确定什么。">${escapeHtml(review.reason)}</textarea>
+        </label>
+        <label>建议
+          <textarea data-field="alternative" placeholder="可选：写出更好的区域、弃牌或立直选择。">${escapeHtml(review.alternative)}</textarea>
+        </label>
+      </div>
+      <div class="decision-data" hidden>${details.map((line) => `<p>${escapeHtml(line)}</p>`).join('')}</div>
+    </section>`;
+  }
+
+  function verdictButton(verdict, current) {
+    const active = verdict === current ? ' active' : '';
+    return `<button type="button" class="verdict-button${active}" data-verdict-choice="${escapeHtml(verdict)}">${escapeHtml(labels[verdict])}</button>`;
+  }
+
+  function allDecisionPanels() {
+    return Array.from(document.querySelectorAll('.decision-review'));
+  }
+
+  function setVerdict(panel, verdict) {
+    if (!panel) {
+      return;
+    }
+    const id = panel.dataset.decisionId;
+    reviews[id] = { ...reviewFor(id), verdict };
+    saveReviews();
+    panel.dataset.verdict = verdict;
+    panel.querySelector('.review-state-pill').className = `review-state-pill ${verdict}`;
+    panel.querySelector('.review-state-pill').textContent = labels[verdict] || labels.pending;
+    panel.querySelectorAll('.verdict-button').forEach((button) => {
+      button.classList.toggle('active', button.dataset.verdictChoice === verdict);
+    });
+    updateReviewStats();
+    applyReviewFilters();
+  }
+
+  function setFeedback(panel, field, value) {
+    if (!panel) {
+      return;
+    }
+    const id = panel.dataset.decisionId;
+    reviews[id] = { ...reviewFor(id), [field]: value };
+    saveReviews();
+  }
+
+  function updateReviewStats() {
+    const panels = allDecisionPanels();
+    const reviewed = panels.filter((panel) => reviewFor(panel.dataset.decisionId).verdict !== 'pending').length;
+    const disagree = panels.filter((panel) => reviewFor(panel.dataset.decisionId).verdict === 'disagree').length;
+    const question = panels.filter((panel) => reviewFor(panel.dataset.decisionId).verdict === 'question').length;
+    const percent = panels.length ? reviewed / panels.length * 100 : 0;
+    document.getElementById('reviewProgressText').textContent = `已审核 ${reviewed} / ${panels.length}`;
+    document.getElementById('reviewIssueCount').textContent = `不赞同 ${disagree} · 有疑问 ${question}`;
+    document.getElementById('reviewProgressFill').style.width = `${percent.toFixed(1)}%`;
+  }
+
+  function applyReviewFilters() {
+    const actionFilter = document.getElementById('actionFilter')?.value || 'all';
+    const reviewFilter = document.getElementById('reviewFilter')?.value || 'all';
+    document.querySelectorAll('.turn').forEach((turn) => {
+      let visiblePanels = 0;
+      turn.querySelectorAll('.decision-review').forEach((panel) => {
+        const review = reviewFor(panel.dataset.decisionId);
+        const actionMatches = actionFilter === 'all' || panel.dataset.actionType === actionFilter;
+        const reviewMatches = reviewFilter === 'all' || review.verdict === reviewFilter;
+        const hidden = !(actionMatches && reviewMatches);
+        panel.classList.toggle('review-hidden', hidden);
+        if (!hidden) {
+          visiblePanels += 1;
+        }
+      });
+      turn.classList.toggle('review-hidden', visiblePanels === 0);
+    });
+  }
+
+  function nextUnreviewed() {
+    const next = allDecisionPanels().find((panel) => reviewFor(panel.dataset.decisionId).verdict === 'pending');
+    if (!next) {
+      return;
+    }
+    document.getElementById('actionFilter').value = 'all';
+    document.getElementById('reviewFilter').value = 'all';
+    const card = next.closest('.replay-card');
+    if (card) {
+      window.showReplay(Number(card.dataset.replayIndex));
+    }
+    applyReviewFilters();
+    next.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function generatePrompt() {
+    const entries = allDecisionPanels()
+      .map((panel) => ({ panel, review: reviewFor(panel.dataset.decisionId) }))
+      .filter((entry) => entry.review.verdict === 'disagree' || entry.review.verdict === 'question');
+    const disagree = entries.filter((entry) => entry.review.verdict === 'disagree');
+    const question = entries.filter((entry) => entry.review.verdict === 'question');
+    const lines = [
+      '请根据以下 JanQ 随机模拟复盘意见，仔细思考并更新策略。',
+      '',
+      `我标记了 ${disagree.length} 个不赞同决定，以及 ${question.length} 个有疑问决定。`,
+      '',
+      '## 明确反对',
+    ];
+    appendPromptEntries(lines, disagree, '明确反对', '我不赞同的理由', '我建议的决定');
+    lines.push('', '## 有疑问');
+    appendPromptEntries(lines, question, '有疑问', '我的疑问', '我目前倾向的决定');
+    const prompt = lines.join('\n').replace(/\n{3,}/g, '\n\n');
+    document.getElementById('promptOutput').value = prompt;
+    document.getElementById('promptSummary').textContent = `已生成：不赞同 ${disagree.length}，有疑问 ${question.length}`;
+  }
+
+  function appendPromptEntries(lines, entries, heading, reasonLabel, alternativeLabel) {
+    if (!entries.length) {
+      lines.push('- 无');
+      return;
+    }
+    entries.forEach(({ panel, review }, index) => {
+      const turn = panel.closest('.turn');
+      const card = panel.closest('.replay-card');
+      const title = panel.querySelector('h4')?.textContent || '';
+      const summary = panel.querySelector('.decision-review-head p')?.textContent || '';
+      const details = Array.from(panel.querySelectorAll('.decision-data p')).map((node) => node.textContent);
+      lines.push(
+        `### ${heading} ${index + 1}：样本 #${replayNumber(card)} / 第 ${turn?.dataset.turnNumber || '?'} 球 / ${title}`,
+        `- 当前决定：${summary}`,
+        ...details.map((line) => `- ${line}`),
+        `- ${reasonLabel}：${review.reason || '（未填写）'}`,
+        `- ${alternativeLabel}：${review.alternative || '（未填写）'}`,
+        '',
+      );
+    });
+  }
+
+  async function copyPrompt() {
+    const output = document.getElementById('promptOutput');
+    if (!output.value.trim()) {
+      generatePrompt();
+    }
+    output.select();
+    try {
+      await navigator.clipboard.writeText(output.value);
+    } catch (_error) {
+      document.execCommand('copy');
+    }
+  }
+
+  ensureReviewPanels();
+  updateReviewStats();
+  applyReviewFilters();
+
+  const baseShowReplay = window.showReplay;
+  window.showReplay = function showReplayWithReview(index) {
+    baseShowReplay(index);
+    applyReviewFilters();
+  };
+
+  document.addEventListener('click', (event) => {
+    const verdict = event.target.closest('[data-verdict-choice]');
+    if (verdict) {
+      setVerdict(verdict.closest('[data-decision-id]'), verdict.dataset.verdictChoice);
+    }
+  });
+  document.addEventListener('input', (event) => {
+    if (!event.target.matches('[data-field]')) {
+      return;
+    }
+    setFeedback(event.target.closest('[data-decision-id]'), event.target.dataset.field, event.target.value);
+  });
+  document.getElementById('actionFilter').addEventListener('change', applyReviewFilters);
+  document.getElementById('reviewFilter').addEventListener('change', applyReviewFilters);
+  document.getElementById('nextUnreviewed').addEventListener('click', nextUnreviewed);
+  document.getElementById('generatePrompt').addEventListener('click', generatePrompt);
+  document.getElementById('copyPrompt').addEventListener('click', copyPrompt);
+})();
 """
 
 
