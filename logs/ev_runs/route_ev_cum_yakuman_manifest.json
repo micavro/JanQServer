@@ -1,0 +1,101 @@
+﻿[
+    {
+        "label":  "500",
+        "part":  -1,
+        "seed":  20260614,
+        "pid":  23944,
+        "out":  "logs\\ev_runs\\route_ev_cum_yakuman_500_seed20260614.json",
+        "err":  "logs\\ev_runs\\route_ev_cum_yakuman_500_seed20260614.err",
+        "start":  "2026-06-14T12:18:10.0099496+08:00"
+    },
+    {
+        "label":  "10000",
+        "part":  0,
+        "seed":  2026061500,
+        "pid":  37524,
+        "out":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part0.json",
+        "err":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part0.err",
+        "start":  "2026-06-14T12:18:10.0278607+08:00"
+    },
+    {
+        "label":  "10000",
+        "part":  1,
+        "seed":  2026061501,
+        "pid":  29208,
+        "out":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part1.json",
+        "err":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part1.err",
+        "start":  "2026-06-14T12:18:10.0354484+08:00"
+    },
+    {
+        "label":  "10000",
+        "part":  2,
+        "seed":  2026061502,
+        "pid":  15164,
+        "out":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part2.json",
+        "err":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part2.err",
+        "start":  "2026-06-14T12:18:10.0424052+08:00"
+    },
+    {
+        "label":  "10000",
+        "part":  3,
+        "seed":  2026061503,
+        "pid":  26480,
+        "out":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part3.json",
+        "err":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part3.err",
+        "start":  "2026-06-14T12:18:10.0516447+08:00"
+    },
+    {
+        "label":  "10000",
+        "part":  4,
+        "seed":  2026061504,
+        "pid":  6512,
+        "out":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part4.json",
+        "err":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part4.err",
+        "start":  "2026-06-14T12:18:10.0596255+08:00"
+    },
+    {
+        "label":  "10000",
+        "part":  5,
+        "seed":  2026061505,
+        "pid":  26800,
+        "out":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part5.json",
+        "err":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part5.err",
+        "start":  "2026-06-14T12:18:10.0680710+08:00"
+    },
+    {
+        "label":  "10000",
+        "part":  6,
+        "seed":  2026061506,
+        "pid":  12084,
+        "out":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part6.json",
+        "err":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part6.err",
+        "start":  "2026-06-14T12:18:10.0763569+08:00"
+    },
+    {
+        "label":  "10000",
+        "part":  7,
+        "seed":  2026061507,
+        "pid":  41140,
+        "out":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part7.json",
+        "err":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part7.err",
+        "start":  "2026-06-14T12:18:10.0843275+08:00"
+    },
+    {
+        "label":  "10000",
+        "part":  8,
+        "seed":  2026061508,
+        "pid":  40176,
+        "out":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part8.json",
+        "err":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part8.err",
+        "start":  "2026-06-14T12:18:10.0936834+08:00"
+    },
+    {
+        "label":  "10000",
+        "part":  9,
+        "seed":  2026061509,
+        "pid":  34616,
+        "out":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part9.json",
+        "err":  "logs\\ev_runs\\route_ev_cum_yakuman_10000_seed20260615_part9.err",
+        "start":  "2026-06-14T12:18:10.1035258+08:00"
+    }
+]

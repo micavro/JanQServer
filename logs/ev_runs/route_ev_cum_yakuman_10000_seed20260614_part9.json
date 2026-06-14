@@ -1,0 +1,119 @@
+{
+  "sessions": 1000,
+  "seed": 2026061409,
+  "bet": 10,
+  "strategy": "route_ev",
+  "paren_table_mode": "previous_han",
+  "normal_haipai_source": "wall",
+  "observed_haipai_hands": 0,
+  "observed_haipai_ignored": 0,
+  "total_bet": 10000,
+  "total_payout": 14932,
+  "total_net": 4932,
+  "roi": 0.4932,
+  "return_to_player": 1.4932,
+  "avg_payout": 14.932,
+  "avg_net": 4.932,
+  "avg_net_ci95": {
+    "low": -1.35249381227107,
+    "high": 11.216493812271072
+  },
+  "normal_wins": 147,
+  "normal_win_rate": 0.147,
+  "normal_win_rate_ci95": {
+    "low": 0.12640395855176664,
+    "high": 0.1702977329390353
+  },
+  "paren_entries": 124,
+  "paren_entry_rate": 0.124,
+  "yakuman_challenge_entries": 26,
+  "yakuman_challenge_entry_rate": 0.026,
+  "avg_paren_wins": 0.157,
+  "avg_yakuman_challenge_wins": 0.038,
+  "avg_yakuman_challenge_units": 0.038,
+  "normal_yaku_levels": {
+    "YL_01HAN": 4,
+    "YL_02HAN": 7,
+    "YL_03HAN": 22,
+    "YL_04HAN": 46,
+    "YL_06HAN": 27,
+    "YL_08HAN": 15,
+    "YL_11HAN": 3,
+    "YL_YAKUMAN": 23
+  },
+  "all_yaku_levels": {
+    "YL_01HAN": 44,
+    "YL_02HAN": 33,
+    "YL_03HAN": 42,
+    "YL_04HAN": 92,
+    "YL_06HAN": 44,
+    "YL_08HAN": 22,
+    "YL_11HAN": 5,
+    "YL_YAKUMAN": 60
+  },
+  "payout_histogram": {
+    "0": 853,
+    "1-9": 18,
+    "10-49": 93,
+    "50-99": 10,
+    "100-499": 15,
+    "500-999": 6,
+    "1000-4999": 5
+  },
+  "payout_breakdown": {
+    "normal_non_yakuman": 1423,
+    "normal_yakuman": 2300,
+    "paren_challenge": 1209,
+    "yakuman_challenge": 10000
+  },
+  "payout_breakdown_ratio": {
+    "normal_non_yakuman": 0.09529868738280203,
+    "normal_yakuman": 0.15403160996517545,
+    "paren_challenge": 0.08096705062952049,
+    "yakuman_challenge": 0.669702652022502
+  },
+  "win_counts": {
+    "normal_non_yakuman_wins": 124,
+    "normal_yakuman_wins": 23,
+    "paren_wins": 157,
+    "yakuman_challenge_wins": 38
+  },
+  "yakuman_yaku_counts": {
+    "chuuren": 16,
+    "daisangen": 8,
+    "kazoe_yakuman": 1,
+    "kokushi": 6,
+    "ryuuiisou": 8,
+    "suuankou": 21
+  },
+  "yakuman_yaku_counts_by_phase": {
+    "normal": {
+      "daisangen": 4,
+      "kazoe_yakuman": 1,
+      "kokushi": 1,
+      "suuankou": 17
+    },
+    "paren_challenge": {},
+    "yakuman_challenge": {
+      "chuuren": 16,
+      "daisangen": 4,
+      "kokushi": 5,
+      "ryuuiisou": 8,
+      "suuankou": 4
+    }
+  },
+  "normal_riichi_count": 404,
+  "normal_riichi_rate": 0.404,
+  "normal_ippatsu_wins": 86,
+  "normal_double_riichi_count": 0,
+  "assumptions": [
+    "normal initial hands are sampled from a physical 136-tile wall",
+    "normal dora tile type is sampled uniformly from the 34 JanQ tile ids",
+    "normal ura-dora tile type is sampled uniformly from the 34 JanQ tile ids and counts only after reach",
+    "nyukyu draws use the copied client's official 7-area probability table",
+    "fourth-copy draws refund one ball, matching the official help",
+    "bonus modes use the copied client's paren/yakuman setup tables",
+    "paren_table_mode=previous_han chooses paren_N from the previous hand's han clamped to 2..12",
+    "route_ev may declare reach in normal mode; reached hands are locked to tsumogiri and first draw after reach can score ippatsu"
+  ]
+}
