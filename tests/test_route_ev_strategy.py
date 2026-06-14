@@ -1,10 +1,53 @@
 import unittest
 
 from janq_lab.assets.nyukyu import load_tables
+from janq_lab.strategy.review_regressions import REVIEW_REGRESSION_CASES
 from janq_lab.strategy.route_ev import choose_route_ev_area, choose_route_ev_discard
 
 
 class RouteEvStrategyTests(unittest.TestCase):
+    def test_all_user_review_regression_cases(self):
+        table = load_tables()["nyukyu_base_table.bytes"]
+
+        for case in REVIEW_REGRESSION_CASES:
+            with self.subTest(case=case.case_id):
+                if case.kind == "area":
+                    decision = choose_route_ev_area(
+                        case.hand,
+                        table,
+                        balls=case.balls,
+                        is_reach=case.is_reach,
+                    )
+                    choice = decision.area
+                    reason = decision.reason
+                else:
+                    decision = choose_route_ev_discard(
+                        case.hand,
+                        balls=case.balls,
+                        is_reach=case.is_reach,
+                        drawn_tile=case.drawn_tile,
+                    )
+                    choice = decision.discard_tile
+                    reason = decision.reason
+
+                self.assertNotIn(
+                    choice,
+                    case.forbidden_choices,
+                    (
+                        f"{case.case_id} chose forbidden {choice}; "
+                        f"reason={reason}; objection={case.objection}"
+                    ),
+                )
+                if case.accepted_choices:
+                    self.assertIn(
+                        choice,
+                        case.accepted_choices,
+                        (
+                            f"{case.case_id} chose {choice}, expected one of "
+                            f"{case.accepted_choices}; reason={reason}"
+                        ),
+                    )
+
     def test_suuankou_discards_off_suit_terminal_before_sou_side_route_singleton(self):
         hand = (
             6,
