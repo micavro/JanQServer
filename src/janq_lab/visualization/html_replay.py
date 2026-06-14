@@ -2684,7 +2684,7 @@ _REVIEW_UI_JS = r"""
     return;
   }
 
-  const storageKey = `janq-sim-review-v1:${location.pathname}:${document.title}`;
+  const storageKey = `janq-sim-review-v2:${location.pathname}:${document.title}`;
   let reviews = loadReviews();
   const labels = {
     pending: '未审核',

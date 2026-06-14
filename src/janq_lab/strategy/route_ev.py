@@ -233,6 +233,19 @@ def choose_route_ev_discard(
     if balls <= 0:
         discard = _least_route_value_discard(state)
         return DiscardDecision(False, discard, None, (), "no_balls")
+    if (
+        drawn_tile is not None
+        and drawn_tile in HONORS
+        and state.counts[drawn_tile] >= 4
+    ):
+        after = state.with_removed_one(drawn_tile)
+        return DiscardDecision(
+            False,
+            drawn_tile,
+            shanten(after),
+            winning_tiles(after),
+            "route_ev_discard:honor_fourth_tsumogiri",
+        )
 
     areas = _default_areas()
     yakuman_tenpai_discard = _yakuman_tenpai_discard(state, areas)
@@ -1097,20 +1110,33 @@ def _normal_lookahead_discard(
         plan = _normal_progress_plan(after, balls, areas)
         targets = plan.targets
         next_area = _next_area_estimate(after.counts, targets, areas)
+        accepts = improving_tiles(after)
+        accept_area = _next_area_estimate(after.counts, accepts, areas) if accepts else next_area
+        preferred_suit = plan.suit or (side_plan.suit if side_plan is not None else None)
+        shape_guard = _normal_discard_shape_guard(
+            hand,
+            tile_id,
+            areas,
+            preferred_suit,
+        )
         keep_score = _normal_discard_keep_score(
             hand,
             tile_id,
             next_area.area,
             areas,
-            plan.suit or (side_plan.suit if side_plan is not None else None),
+            preferred_suit,
         )
         candidates.append(
             (
+                shape_guard,
+                -after_shanten,
+                accept_area.score,
+                accept_area.progress_probability,
+                len(accepts),
                 next_area.score,
                 next_area.progress_probability,
                 next_area.alternate_progress_probability,
                 next_area.protection_probability,
-                len(targets),
                 -keep_score,
                 -tile_id,
                 tile_id,
@@ -1655,6 +1681,47 @@ def _at_least_one(trials: int, p: float) -> float:
 
 def _least_route_value_discard(hand: TileSet) -> int:
     return min(discard_options(hand), key=lambda tile_id: _tile_keep_bias(hand, tile_id))
+
+
+def _normal_discard_shape_guard(
+    hand: TileSet,
+    tile_id: int,
+    areas: tuple[tuple[int, ...], ...],
+    preferred_suit: frozenset[int] | None,
+) -> float:
+    count = hand.counts[tile_id]
+    guard = 0.0
+
+    if count == 3:
+        guard -= 100.0
+    elif (
+        count == 2
+        and preferred_suit is not None
+        and tile_id in preferred_suit
+    ):
+        guard -= 8.0
+
+    if count == 1 and _is_complete_sequence_member(hand.counts, tile_id):
+        guard -= 80.0
+
+    if preferred_suit is not None:
+        side_area = _best_side_area_for_suit(hand.counts, preferred_suit, areas)
+        primary_honor = SIDE_AREA_HONORS[side_area]
+        if tile_id == primary_honor:
+            guard -= 26.0
+
+    return guard
+
+
+def _is_complete_sequence_member(counts: tuple[int, ...], tile_id: int) -> bool:
+    if tile_id >= 27:
+        return False
+    start = tile_id - (tile_id % 9)
+    rank = tile_id % 9
+    for seq_rank in range(max(0, rank - 2), min(rank, 6) + 1):
+        if all(counts[start + seq_rank + offset] > 0 for offset in range(3)):
+            return True
+    return False
 
 
 def _normal_discard_keep_score(

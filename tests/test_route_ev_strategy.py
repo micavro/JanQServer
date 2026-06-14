@@ -534,7 +534,7 @@ class RouteEvStrategyTests(unittest.TestCase):
             balls=3,
             drawn_tile=1,
         )
-        self.assertEqual(1, discard_3073.discard_tile)
+        self.assertEqual(27, discard_3073.discard_tile)
 
         # line 3989 question: 北(id=30) is protected, so effective denominators
         # are area6=1400/9000 and area7=1700/8000; area7 remains best.
@@ -547,6 +547,61 @@ class RouteEvStrategyTests(unittest.TestCase):
         self.assertEqual(7, area_3989.area)
         self.assertEqual((20, 23), area_3989.target_tiles)
         self.assertIn("progress=0.212", area_3989.reason)
+
+    def test_random_review_keeps_meld_before_area_probability_chase(self):
+        # Random review sample #1 turn 5: once no special yaku remains, normal
+        # efficiency must not break the completed 789p block for a side-sou area.
+        decision = choose_route_ev_discard(
+            (3, 5, 6, 6, 9, 11, 11, 12, 16, 16, 24, 25, 26, 11),
+            balls=4,
+            drawn_tile=11,
+        )
+
+        self.assertEqual(12, decision.discard_tile)
+        self.assertEqual(1, decision.shanten_after)
+        self.assertNotIn(decision.discard_tile, (24, 25, 26))
+
+    def test_random_review_normal_efficiency_does_not_break_sou_shape(self):
+        # Random review sample #2 turns 3/4: the old next-area scorer cut 4s/5s.
+        # General efficiency should preserve the sou block and cut a weaker tile.
+        turn3 = choose_route_ev_discard(
+            (3, 5, 10, 12, 12, 14, 21, 22, 26, 28, 28, 28, 29, 12),
+            balls=7,
+            drawn_tile=12,
+        )
+        turn4 = choose_route_ev_discard(
+            (3, 5, 10, 12, 12, 14, 21, 22, 26, 28, 28, 28, 29, 13),
+            balls=6,
+            drawn_tile=13,
+        )
+
+        self.assertEqual(26, turn3.discard_tile)
+        self.assertEqual(2, turn3.shanten_after)
+        self.assertNotIn(turn3.discard_tile, (12, 13))
+        self.assertEqual(26, turn4.discard_tile)
+        self.assertEqual(2, turn4.shanten_after)
+        self.assertNotIn(turn4.discard_tile, (12, 13))
+
+    def test_random_review_fourth_honor_is_tsumogiri(self):
+        decision = choose_route_ev_discard(
+            (3, 5, 10, 10, 11, 12, 12, 14, 14, 21, 28, 28, 28, 28),
+            balls=1,
+            drawn_tile=28,
+        )
+
+        self.assertEqual(28, decision.discard_tile)
+        self.assertIn("honor_fourth_tsumogiri", decision.reason)
+
+    def test_random_review_question_uses_normal_improvement_efficiency(self):
+        decision = choose_route_ev_discard(
+            (1, 3, 5, 6, 9, 11, 11, 12, 16, 16, 24, 25, 26, 6),
+            balls=5,
+            drawn_tile=6,
+        )
+
+        self.assertEqual(9, decision.discard_tile)
+        self.assertEqual(2, decision.shanten_after)
+        self.assertNotIn(decision.discard_tile, (24, 25, 26))
 
 
 if __name__ == "__main__":

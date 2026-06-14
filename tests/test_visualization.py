@@ -66,7 +66,7 @@ class HtmlReplayTests(unittest.TestCase):
         self.assertIn('class="panel review-toolbar"', html)
         self.assertIn('id="promptOutput"', html)
         self.assertIn("initReviewUi", html)
-        self.assertIn("janq-sim-review-v1", html)
+        self.assertIn("janq-sim-review-v2", html)
         self.assertIn('data-shot-area="', html)
         self.assertIn('data-hand-before="', html)
 
