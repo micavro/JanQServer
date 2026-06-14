@@ -69,6 +69,7 @@ class HtmlReplayTests(unittest.TestCase):
         self.assertIn("janq-sim-review-v2", html)
         self.assertIn('data-shot-area="', html)
         self.assertIn('data-hand-before="', html)
+        self.assertIn("turn.dataset.holdHand !== 'true'", html)
 
     def test_bonus_replay_matches_economy_simulation(self):
         replay_set = simulate_replay_set(
@@ -92,6 +93,16 @@ class HtmlReplayTests(unittest.TestCase):
         self.assertTrue(replay.bonus_hands[0].win)
         self.assertFalse(replay.bonus_hands[1].win)
         self.assertEqual(15, replay.bonus_hands[0].payout)
+        self.assertTrue(all(hand.hold_hand for hand in replay.bonus_hands))
+        for bonus in replay.bonus_hands:
+            for turn in bonus.turns:
+                if not turn.is_agari:
+                    self.assertEqual(turn.drawn_tile, turn.discard_decision.discard_tile)
+                    self.assertEqual(
+                        "bonus_hold_auto_discard",
+                        turn.discard_decision.reason,
+                    )
+                    self.assertEqual(turn.hand_before, turn.hand_after_discard)
 
     def test_render_html_contains_bonus_chain_and_economy_summary(self):
         replay_set = simulate_replay_set(
@@ -110,6 +121,9 @@ class HtmlReplayTests(unittest.TestCase):
         self.assertIn("完整游戏经济", html)
         self.assertIn("ROI", html)
         self.assertIn("RTP", html)
+        self.assertIn("HOLD 锁定", html)
+        self.assertIn("HOLD 自动摸切", html)
+        self.assertIn('data-hold-hand="true"', html)
 
     def test_yakuman_bonus_replay_uses_progressive_payout(self):
         replay = simulate_replay(

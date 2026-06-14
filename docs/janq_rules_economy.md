@@ -28,12 +28,14 @@ This document records the rule/economy model used by `janq_lab` simulations.
 6. A normal non-yakuman win pays immediately and enters hachiren challenge.
 7. A normal yakuman or counted-yakuman win pays immediately and enters yakuman
    challenge.
-8. Hachiren challenge is free play, starts from tenpai, has 3 balls, auto-wins
-   when a winning tile is drawn, and continues on wins. Reaching eight wins
-   including the normal-game win enters yakuman challenge. A counted yakuman
-   before eight also enters yakuman challenge.
-9. Yakuman challenge is free play, starts from yakuman tenpai, has 3 balls, and
-   continues on yakuman wins. Ryukyoku ends the session.
+8. Hachiren challenge is free play, starts from tenpai, has 3 balls, and HOLD
+   locks the starting 13 tiles. A winning draw wins immediately; any
+   non-winning draw is automatically discarded without a player discard
+   choice. Fourth-copy protection still refunds one ball. Wins continue the
+   challenge. Reaching eight wins including the normal-game win enters yakuman
+   challenge. A counted yakuman before eight also enters yakuman challenge.
+9. Yakuman challenge uses the same HOLD flow, starts from yakuman tenpai, has
+   3 balls, and continues on yakuman wins. Ryukyoku ends the session.
 
 ## Adopted JanQ scoring rules
 
@@ -99,6 +101,8 @@ and overlapping yakuman add their overlapping units to that count.
 - Shot draws use the copied client's official nyukyu tables.
 - Hachiren and yakuman challenge starting hands use the copied client's special
   tables.
+- Both challenge modes keep their generated 13-tile hand locked for the whole
+  attempt. The simulation never calls a discard optimizer for these hands.
 - `previous_han` hachiren mode chooses `paren_N_table.bytes` from the previous
   hand's han clamped to 2..12.
 - `select_table` hachiren mode samples `paren_N_table.bytes` from

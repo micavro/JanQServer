@@ -33,7 +33,10 @@ python -m janq_lab.visualization.html_replay --seed 20260613 --strategy route_ev
 ```
 
 Replay HTML includes the full ordinary/yakuman bonus chain and session ROI/RTP
-summary by default. Use `--no-bonus` for a normal-game-only diagnostic page.
+summary by default. Bonus hands use the game's HOLD rule: the starting 13 tiles
+stay locked, failed draws are automatically discarded, and fourth-copy
+protection still refunds one ball. Use `--no-bonus` for a normal-game-only
+diagnostic page.
 
 Runtime logs and generated artifacts belong under `_runtime`.
 

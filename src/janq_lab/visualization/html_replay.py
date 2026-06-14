@@ -26,7 +26,13 @@ from janq_lab.analysis.economy_monte_carlo import (
 )
 from janq_lab.model.economy import payout_for_score, yakuman_challenge_payout
 from janq_lab.model.haipai import load_observed_normal_haipai, random_wall_hand
-from janq_lab.model.hand import TileSet, tile_set
+from janq_lab.model.hand import (
+    TileSet,
+    is_complete_hand,
+    shanten,
+    tile_set,
+    winning_tiles,
+)
 from janq_lab.model.scoring import JanqScore, score_hand
 from janq_lab.strategy.greedy import (
     AreaDecision,
@@ -87,6 +93,7 @@ class ReplayHand:
     payout: int = 0
     cumulative_payout: int = 0
     cumulative_yakuman_units: int = 0
+    hold_hand: bool = False
     bonus_hands: tuple["ReplayHand", ...] = ()
 
     @property
@@ -178,6 +185,7 @@ def simulate_replay(
     _dora_id: int | None = None,
     _ura_dora_id: int | None = None,
     _randomize_dora: bool = True,
+    hold_hand: bool = False,
 ) -> ReplayHand:
     if balls < 1:
         raise ValueError("balls must be positive")
@@ -235,16 +243,35 @@ def simulate_replay(
             current_balls += 1
         hand_after_draw = hand.to_tiles()
         balls_after_draw = current_balls
-        discard_decision = _call_choose_discard(
-            choose_discard,
-            hand,
-            current_balls,
-            dora_id=dora_id,
-            ura_dora_id=ura_dora_id,
-            is_reach=riichi_active,
-            turn=turn_number,
-            drawn_tile=drawn_tile,
-        )
+        if hold_hand:
+            if is_complete_hand(hand):
+                discard_decision = DiscardDecision(
+                    True,
+                    None,
+                    None,
+                    (),
+                    "bonus_hold_agari",
+                )
+            else:
+                locked_hand = hand.with_removed_one(drawn_tile)
+                discard_decision = DiscardDecision(
+                    False,
+                    drawn_tile,
+                    shanten(locked_hand),
+                    winning_tiles(locked_hand),
+                    "bonus_hold_auto_discard",
+                )
+        else:
+            discard_decision = _call_choose_discard(
+                choose_discard,
+                hand,
+                current_balls,
+                dora_id=dora_id,
+                ura_dora_id=ura_dora_id,
+                is_reach=riichi_active,
+                turn=turn_number,
+                drawn_tile=drawn_tile,
+            )
         riichi_declared = (not riichi_active) and discard_decision.declare_riichi
 
         if discard_decision.is_agari:
@@ -293,6 +320,7 @@ def simulate_replay(
                 mode_index=mode_index,
                 payout=payout_for_score(score, bet=bet),
                 cumulative_payout=payout_for_score(score, bet=bet),
+                hold_hand=hold_hand,
             )
             if include_bonus and mode == "normal":
                 return _attach_bonus_hands(
@@ -350,6 +378,7 @@ def simulate_replay(
         source_label=source_label,
         mode=mode,
         mode_index=mode_index,
+        hold_hand=hold_hand,
     )
 
 
@@ -408,6 +437,7 @@ def _attach_bonus_hands(
                 _dora_id=record.dora_id,
                 _ura_dora_id=None,
                 _randomize_dora=False,
+                hold_hand=True,
             )
             cumulative_payout += replay.payout
             replay = replace(replay, cumulative_payout=cumulative_payout)
@@ -448,6 +478,7 @@ def _attach_bonus_hands(
                 _dora_id=None,
                 _ura_dora_id=None,
                 _randomize_dora=False,
+                hold_hand=True,
             )
             if replay.win and replay.score is not None:
                 cumulative_yakuman_units += max(1, replay.score.yakuman_count)
@@ -873,7 +904,8 @@ def _render_strategy_note(strategy: str) -> str:
             "普通局优先检索役满路线：四暗刻、大三元、九莲、国士；"
             "役满路线激活后，区域选择偏向路线前进、直接和牌和第四张保护。"
             "四暗刻/大三元舍牌会额外保留未来最可能继续打的花色和混一色后路。"
-            "没有明确役满路线时回到 public 路线。奖励局仍应使用三球听牌专用策略。"
+            "没有明确役满路线时回到 public 路线。奖励局使用三球听牌专用区域策略，"
+            "但手牌 HOLD 锁定，未和牌时只能自动摸切。"
         )
     elif strategy == "public":
         body = (
@@ -1068,6 +1100,7 @@ def _render_bonus_hand(
     ]
     status = "成功和牌" if replay.win else "失败，奖励链结束"
     status_class = "win" if replay.win else "lose"
+    hold_badge = '<span class="hold-badge">HOLD 锁定</span>' if replay.hold_hand else ""
     units = (
         f'<span>累计役满单位 <b>{replay.cumulative_yakuman_units}</b></span>'
         if is_yakuman
@@ -1078,7 +1111,7 @@ def _render_bonus_hand(
   <div class="bonus-hand-head">
     <div>
       <p class="eyebrow">{escape(mode_label)} #{replay.mode_index}</p>
-      <h3>{escape(status)}</h3>
+      <h3>{escape(status)} {hold_badge}</h3>
       <p>{escape(replay.source_label)} · Dora: {_tile_label(replay.dora_id)}</p>
     </div>
     <div class="bonus-result">
@@ -1117,7 +1150,13 @@ def _render_turns(replay: ReplayHand, table: NyukyuTable) -> str:
 
 def _render_turn(turn: ReplayTurn, table: NyukyuTable) -> str:
     discard = turn.discard_decision
-    discard_text = "和牌" if discard.is_agari else f"弃 {_tile_label(discard.discard_tile)}"
+    hold_auto_discard = discard.reason == "bonus_hold_auto_discard"
+    if discard.is_agari:
+        discard_text = "和牌"
+    elif hold_auto_discard:
+        discard_text = f"HOLD 自动摸切 {_tile_label(discard.discard_tile)}"
+    else:
+        discard_text = f"弃 {_tile_label(discard.discard_tile)}"
     if discard.declare_riichi:
         discard_text = f"{discard_text} + 立直"
     protection = "保护 +1球" if turn.fourth_copy else "无保护"
@@ -1133,6 +1172,7 @@ def _render_turn(turn: ReplayTurn, table: NyukyuTable) -> str:
     return f"""
 <article class="turn" data-turn-number="{turn.turn}" data-balls-before="{turn.balls_before}"
   data-balls-after="{turn.balls_after_draw}" data-shot-area="{turn.area_decision.area}"
+  data-hold-hand="{str(hold_auto_discard or discard.reason == 'bonus_hold_agari').lower()}"
   data-shot-reason="{escape(turn.area_decision.reason)}" data-shot-targets="{escape(targets)}"
   data-shot-target-weight="{turn.area_decision.target_weight}"
   data-discard-choice="{escape(discard_text)}" data-discard-reason="{escape(discard.reason)}"
@@ -1837,6 +1877,18 @@ h1 {
 .result-pill.lose {
   background: #f4f0e8;
   color: #8b681f;
+}
+
+.hold-badge {
+  display: inline-flex;
+  margin-left: 6px;
+  border: 1px solid #8a6a22;
+  border-radius: 5px;
+  background: #fff4d8;
+  color: #785816;
+  padding: 3px 7px;
+  font-size: 12px;
+  vertical-align: middle;
 }
 
 .replay-stage {
@@ -2729,7 +2781,7 @@ _REVIEW_UI_JS = r"""
         const discardId = decisionId(turn, 'discard');
         const stack = document.createElement('section');
         stack.className = 'review-stack';
-        stack.innerHTML = [
+        const panels = [
           renderDecisionPanel(
             shotId,
             'shot',
@@ -2737,14 +2789,17 @@ _REVIEW_UI_JS = r"""
             `区域 ${turn.dataset.shotArea || '-'} · ${turn.dataset.shotReason || ''}`,
             shotDetails(turn, card),
           ),
-          renderDecisionPanel(
+        ];
+        if (turn.dataset.holdHand !== 'true') {
+          panels.push(renderDecisionPanel(
             discardId,
             'discard',
             '弃牌/立直决策',
             `${turn.dataset.discardChoice || '-'} · ${turn.dataset.discardReason || ''}`,
             discardDetails(turn, card),
-          ),
-        ].join('');
+          ));
+        }
+        stack.innerHTML = panels.join('');
         turn.appendChild(stack);
       });
     });

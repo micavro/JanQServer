@@ -8,7 +8,13 @@ from typing import Callable
 
 from janq_lab.assets.nyukyu import NyukyuTable
 from janq_lab.model.haipai import random_wall_hand
-from janq_lab.model.hand import TileSet, tile_set
+from janq_lab.model.hand import (
+    TileSet,
+    is_complete_hand,
+    shanten,
+    tile_set,
+    winning_tiles,
+)
 from janq_lab.strategy.greedy import (
     AreaDecision,
     DiscardDecision,
@@ -68,6 +74,7 @@ def simulate_hand(
     max_turns: int = 100,
     dora_id: int | None = None,
     ura_dora_id: int | None = None,
+    hold_hand: bool = False,
 ) -> SimulationResult:
     """Simulate one normal JanQ hand.
 
@@ -112,16 +119,35 @@ def simulate_hand(
         if fourth_copy:
             balls += 1
 
-        discard_decision = _call_choose_discard(
-            choose_discard,
-            hand,
-            balls,
-            dora_id=dora_id,
-            ura_dora_id=ura_dora_id,
-            is_reach=riichi_active,
-            turn=len(turns) + 1,
-            drawn_tile=tile_id,
-        )
+        if hold_hand:
+            if is_complete_hand(hand):
+                discard_decision = DiscardDecision(
+                    True,
+                    None,
+                    None,
+                    (),
+                    "bonus_hold_agari",
+                )
+            else:
+                locked_hand = hand.with_removed_one(tile_id)
+                discard_decision = DiscardDecision(
+                    False,
+                    tile_id,
+                    shanten(locked_hand),
+                    winning_tiles(locked_hand),
+                    "bonus_hold_auto_discard",
+                )
+        else:
+            discard_decision = _call_choose_discard(
+                choose_discard,
+                hand,
+                balls,
+                dora_id=dora_id,
+                ura_dora_id=ura_dora_id,
+                is_reach=riichi_active,
+                turn=len(turns) + 1,
+                drawn_tile=tile_id,
+            )
         shot = ShotEvent(
             area=area_decision.area,
             tile_id=tile_id,

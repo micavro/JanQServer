@@ -4,6 +4,7 @@ import unittest
 from janq_lab.assets.nyukyu import AREA_COUNT, NyukyuTable
 from janq_lab.model.hand import is_complete_hand, shanten, tile_set, winning_tiles
 from janq_lab.model.simulator import simulate_hand
+from janq_lab.strategy.bonus import choose_bonus_discard
 from janq_lab.strategy.greedy import AreaDecision, DiscardDecision
 
 
@@ -55,6 +56,11 @@ fixed_area.uses_full_context = True
 declare_then_agari.uses_full_context = True
 
 
+def forbidden_hold_discard(*args, **kwargs):
+    del args, kwargs
+    raise AssertionError("HOLD mode must not call the discard policy")
+
+
 class SimulatorTests(unittest.TestCase):
     def test_tenpai_hand_wins_when_wait_is_drawn(self):
         table = deterministic_table(31)
@@ -73,6 +79,58 @@ class SimulatorTests(unittest.TestCase):
         self.assertTrue(result.turns[0].shot.fourth_copy)
         self.assertEqual(1, result.turns[0].shot.balls_before)
         self.assertEqual(1, result.turns[0].shot.balls_after)
+
+    def test_hold_hand_auto_discards_draw_without_changing_locked_tiles(self):
+        table = deterministic_table(5)
+        hand = [0, 1, 2, 9, 10, 11, 18, 19, 20, 27, 27, 27, 31]
+
+        result = simulate_hand(
+            hand,
+            table,
+            balls=1,
+            max_turns=1,
+            choose_area=fixed_area,
+            choose_discard=forbidden_hold_discard,
+            hold_hand=True,
+        )
+
+        self.assertFalse(result.win)
+        self.assertEqual(tuple(sorted(hand)), result.final_hand.to_tiles())
+        self.assertEqual(5, result.turns[0].discard.discard_tile)
+        self.assertEqual("bonus_hold_auto_discard", result.turns[0].discard.reason)
+
+    def test_hold_hand_fourth_copy_refunds_ball_then_auto_discards(self):
+        table = deterministic_table(0)
+        hand = [0, 0, 0, 1, 2, 9, 10, 11, 18, 19, 20, 27, 31]
+
+        result = simulate_hand(
+            hand,
+            table,
+            balls=1,
+            max_turns=1,
+            choose_area=fixed_area,
+            choose_discard=forbidden_hold_discard,
+            hold_hand=True,
+        )
+
+        self.assertFalse(result.win)
+        self.assertEqual(tuple(sorted(hand)), result.final_hand.to_tiles())
+        self.assertTrue(result.turns[0].shot.fourth_copy)
+        self.assertEqual(1, result.turns[0].shot.balls_after)
+        self.assertEqual(0, result.turns[0].discard.discard_tile)
+
+    def test_bonus_discard_policy_cannot_rebuild_locked_hand(self):
+        hand = [0, 1, 2, 5, 9, 10, 11, 18, 19, 20, 27, 27, 27, 31]
+
+        decision = choose_bonus_discard(
+            hand,
+            balls=2,
+            drawn_tile=5,
+        )
+
+        self.assertFalse(decision.is_agari)
+        self.assertEqual(5, decision.discard_tile)
+        self.assertEqual("bonus_hold_auto_discard", decision.reason)
 
     def test_riichi_and_ippatsu_are_recorded(self):
         table = SequenceTable([5, 31])

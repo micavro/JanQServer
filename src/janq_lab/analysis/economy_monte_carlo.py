@@ -408,6 +408,7 @@ def simulate_session(
                 choose_area=choose_bonus_area,
                 choose_discard=choose_bonus_discard,
                 dora_id=record.dora_id,
+                hold_hand=True,
             )
             if paren.score is None:
                 break
@@ -438,6 +439,7 @@ def simulate_session(
                 choose_area=choose_bonus_area,
                 choose_discard=choose_bonus_discard,
                 dora_id=None,
+                hold_hand=True,
             )
             if yakuman.score is None:
                 break
@@ -483,6 +485,7 @@ def _simulate_scored_hand(
     choose_discard: Any,
     dora_id: int | None,
     ura_dora_id: int | None = None,
+    hold_hand: bool = False,
 ) -> ScoredHandResult:
     simulation = simulate_hand(
         initial_hand,
@@ -493,6 +496,7 @@ def _simulate_scored_hand(
         choose_discard=choose_discard,
         dora_id=dora_id,
         ura_dora_id=ura_dora_id,
+        hold_hand=hold_hand,
     )
     if not simulation.win:
         return ScoredHandResult(
