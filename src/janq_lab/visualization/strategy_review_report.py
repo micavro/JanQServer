@@ -39,6 +39,8 @@ def evaluate_strategy_review_case(case: StrategyReviewCase) -> StrategyReviewRes
             case.hand,
             table,
             balls=case.balls,
+            dora_id=case.dora_id,
+            ura_dora_id=case.ura_dora_id,
             is_reach=case.is_reach,
         )
         choice: int | None = decision.area
@@ -54,6 +56,8 @@ def evaluate_strategy_review_case(case: StrategyReviewCase) -> StrategyReviewRes
     decision = choose_route_ev_discard(
         case.hand,
         balls=case.balls,
+        dora_id=case.dora_id,
+        ura_dora_id=case.ura_dora_id,
         is_reach=case.is_reach,
         drawn_tile=case.drawn_tile,
     )
@@ -191,6 +195,7 @@ def _render_case(
     <span>剩余球数 <b>{case.balls}</b></span>
     <span>立直状态 <b>{'已立直' if case.is_reach else '未立直'}</b></span>
   </div>
+  {_render_dora_strip(case, assets)}
   <section class="hand-state">
     <div class="hand-block">
       <span>{'当前手牌 13张' if drawn is None else '摸前手牌 13张'}</span>
@@ -211,6 +216,38 @@ def _render_case(
   </section>
 </article>
 """
+
+
+def _render_dora_strip(
+    case: StrategyReviewCase,
+    assets: TileImageAssets,
+) -> str:
+    return (
+        '<section class="dora-strip" aria-label="宝牌与里宝牌">'
+        f'{_render_dora_item("宝牌", case.dora_id, assets)}'
+        f'{_render_dora_item("里宝牌", case.ura_dora_id, assets)}'
+        "</section>"
+    )
+
+
+def _render_dora_item(
+    label: str,
+    tile_id: int | None,
+    assets: TileImageAssets,
+) -> str:
+    if tile_id is None:
+        tile = '<span class="tile unknown">-</span>'
+        name = "未记录"
+        state = " unknown"
+    else:
+        tile = _tile_html(tile_id, assets)
+        name = _tile_label(tile_id)
+        state = ""
+    return (
+        f'<div class="dora-item{state}">'
+        f'<span>{escape(label)}</span>{tile}<b>{escape(name)}</b>'
+        "</div>"
+    )
 
 
 def _result_detail(result: StrategyReviewResult) -> str:
@@ -431,6 +468,45 @@ h2 { margin-bottom: 6px; font-size: 20px; }
 
 .state-strip span { color: var(--muted); }
 .state-strip b { margin-left: 5px; color: var(--ink); }
+
+.dora-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.dora-item {
+  display: grid;
+  grid-template-columns: auto 30px auto;
+  gap: 7px;
+  align-items: center;
+  min-height: 42px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f7f9f8;
+}
+
+.dora-item > span:first-child {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.dora-item .tile {
+  width: 28px;
+  height: 38px;
+}
+
+.dora-item.unknown .tile {
+  color: var(--muted);
+  background: #edf1ef;
+}
+
+.dora-item b {
+  font-size: 13px;
+}
 
 .hand-state {
   align-items: stretch;

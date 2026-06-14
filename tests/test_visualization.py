@@ -45,12 +45,18 @@ class HtmlReplayTests(unittest.TestCase):
         )
 
         html = render_replay_set_html(replay_set)
+        replay = replay_set.replays[0]
 
         self.assertIn("当前策略：route_ev", html)
         self.assertIn("example-list", html)
         self.assertIn("prob-data", html)
         self.assertIn('data-area="4"', html)
         self.assertIn("区域概率", html)
+        self.assertIn('class="dora-strip"', html)
+        self.assertIn("宝牌", html)
+        self.assertIn("里宝牌", html)
+        self.assertIn(f"tile-id-{replay.dora_id}", html)
+        self.assertIn(f"tile-id-{replay.ura_dora_id}", html)
 
     def test_render_html_can_include_review_controls(self):
         replay_set = simulate_replay_set(

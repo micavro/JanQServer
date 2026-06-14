@@ -94,6 +94,7 @@ class NormalProgressPlan:
     reason: str
     targets: tuple[int, ...]
     suit: frozenset[int] | None = None
+    target_factors: tuple[float, ...] = ()
 
 
 def choose_route_ev_area(
@@ -167,7 +168,12 @@ def choose_route_ev_area(
         if plan.targets:
             return _area_decision_from_estimate(
                 table,
-                _next_area_estimate(state.counts, plan.targets, table.areas),
+                _next_area_estimate(
+                    state.counts,
+                    plan.targets,
+                    table.areas,
+                    target_factors=plan.target_factors,
+                ),
                 plan.reason,
             )
         return choose_public_area(state, table)
@@ -179,9 +185,21 @@ def choose_route_ev_area(
             table.areas,
         )
         if targets:
+            factors = _honitsu_progress_target_factors(
+                state,
+                active_route.name,
+                balls,
+                table.areas,
+                targets,
+            )
             return _area_decision_from_estimate(
                 table,
-                _next_area_estimate(state.counts, targets, table.areas),
+                _next_area_estimate(
+                    state.counts,
+                    targets,
+                    table.areas,
+                    target_factors=factors,
+                ),
                 f"{active_route.name}_next_area",
             )
         return choose_public_area(state, table)
@@ -783,20 +801,33 @@ def _daisangen_estimate(
 ) -> RouteEstimate:
     dragon_missing = sum(max(0, 3 - counts[tile_id]) for tile_id in DRAGONS)
     targets = tuple(tile_id for tile_id in DRAGONS if counts[tile_id] < 3)
-    shape_drag = max(0, shanten(TileSet(counts)) - 1)
-    if balls >= 7 and any(counts[tile_id] >= 2 for tile_id in DRAGONS):
-        outside_counts = list(counts)
-        for tile_id in DRAGONS:
-            outside_counts[tile_id] = 0
-        outside_melds = _suit_sequence_count(tuple(outside_counts), MAN)
-        outside_melds += _suit_sequence_count(tuple(outside_counts), SOU)
-        outside_melds += _suit_sequence_count(tuple(outside_counts), PIN)
-        outside_melds += sum(1 for tile_id in HONORS if tile_id not in DRAGONS and counts[tile_id] >= 3)
-        if outside_melds >= 1:
-            shape_drag = 0
-    missing = dragon_missing + shape_drag
+    outside_missing = _outside_meld_pair_missing(counts)
+    missing = dragon_missing + outside_missing
     probability = _route_probability(counts, targets, missing, balls, areas)
     return RouteEstimate("daisangen", DASANGEN_ROUTE_VALUE, missing, targets, probability)
+
+
+def _outside_meld_pair_missing(counts: tuple[int, ...]) -> int:
+    """Minimum draws needed for the non-dragon meld and pair in daisangen."""
+    outside_tiles = tuple(tile_id for tile_id in range(TILE_COUNT) if tile_id not in DRAGONS)
+    best = 5
+    for pair_tile in outside_tiles:
+        for meld_tile in outside_tiles:
+            if meld_tile == pair_tile:
+                continue
+            cost = max(0, 2 - counts[pair_tile]) + max(0, 3 - counts[meld_tile])
+            best = min(best, cost)
+
+        for suit in SUITS:
+            start = min(suit)
+            for rank in range(7):
+                sequence = (start + rank, start + rank + 1, start + rank + 2)
+                cost = 0
+                for tile_id in sequence:
+                    needed = 1 + (2 if tile_id == pair_tile else 0)
+                    cost += max(0, needed - counts[tile_id])
+                best = min(best, cost)
+    return best
 
 
 def _chuuren_estimate(
@@ -1014,13 +1045,15 @@ def _yakuman_lookahead_discard(
     finalists = [
         candidate
         for candidate in shortest
-        if abs(candidate[2] - best_probability) < 1e-12
+        if candidate[2] >= best_probability * 0.90
     ]
 
+    side_suit = _side_route_suit(hand.counts, route)
     candidates = []
     for _, _, _, tile_id, _, _, next_area in finalists:
         candidates.append(
             (
+                _yakuman_fallback_discard_guard(hand, tile_id, side_suit),
                 next_area.score,
                 next_area.progress_probability,
                 next_area.alternate_progress_probability,
@@ -1032,6 +1065,21 @@ def _yakuman_lookahead_discard(
         )
     *_, discard, next_area = max(candidates)
     return discard, next_area
+
+
+def _yakuman_fallback_discard_guard(
+    hand: TileSet,
+    tile_id: int,
+    side_suit: frozenset[int] | None,
+) -> int:
+    if side_suit is None:
+        return 0
+    count = hand.counts[tile_id]
+    if tile_id in side_suit:
+        return -4 if count >= 2 else -1
+    if tile_id in HONORS:
+        return -2 if count >= 2 else 0
+    return 2 if count == 1 else -1
 
 
 def _honitsu_lookahead_discard(
@@ -1069,7 +1117,19 @@ def _honitsu_lookahead_discard(
     candidates = []
     for _, _, _, tile_id, after, post_route in finalists:
         targets = _honitsu_progress_targets(after, route.name, balls, areas)
-        next_area = _next_area_estimate(after.counts, targets, areas)
+        target_factors = _honitsu_progress_target_factors(
+            after,
+            route.name,
+            balls,
+            areas,
+            targets,
+        )
+        next_area = _next_area_estimate(
+            after.counts,
+            targets,
+            areas,
+            target_factors=target_factors,
+        )
         candidates.append(
             (
                 next_area.score,
@@ -1109,7 +1169,12 @@ def _normal_lookahead_discard(
     for after_shanten, tile_id, after in finalists:
         plan = _normal_progress_plan(after, balls, areas)
         targets = plan.targets
-        next_area = _next_area_estimate(after.counts, targets, areas)
+        next_area = _next_area_estimate(
+            after.counts,
+            targets,
+            areas,
+            target_factors=plan.target_factors,
+        )
         accepts = improving_tiles(after)
         accept_area = _next_area_estimate(after.counts, accepts, areas) if accepts else next_area
         preferred_suit = plan.suit or (side_plan.suit if side_plan is not None else None)
@@ -1167,7 +1232,12 @@ def _normal_progress_plan(
     side_plan = _normal_side_plan(hand, balls, areas)
     if side_plan is not None:
         return side_plan
-    return NormalProgressPlan("normal_next_area", improving_tiles(hand))
+    targets = improving_tiles(hand)
+    return NormalProgressPlan(
+        "normal_next_area",
+        targets,
+        target_factors=(1.0,) * len(targets),
+    )
 
 
 def _normal_side_plan(
@@ -1179,9 +1249,15 @@ def _normal_side_plan(
         return None
 
     counts = hand.counts
+    hand_shanten = shanten(hand)
+    suit_counts = {
+        suit: sum(counts[tile_id] for tile_id in suit)
+        for suit in SUITS
+    }
+    direct_targets = improving_tiles(hand)
     candidates = []
     for suit in SUITS:
-        suit_count = sum(counts[tile_id] for tile_id in suit)
+        suit_count = suit_counts[suit]
         if suit_count < 5:
             continue
         area = _best_side_area_for_suit(counts, suit, areas)
@@ -1191,21 +1267,78 @@ def _normal_side_plan(
         triplets = sum(1 for tile_id in suit if counts[tile_id] >= 3)
         sequences = _suit_sequence_count(counts, suit)
         shape_score = pairish + triplets + sequences
+        other_suit_count = max(
+            count for other_suit, count in suit_counts.items() if other_suit != suit
+        )
+        soft_far_lean = (
+            hand_shanten >= 3
+            and balls >= 5
+            and suit_count >= 6
+            and suit_count - other_suit_count >= 2
+        )
         strong_side = (
-            suit_count >= 7
-            or (suit_count >= 6 and balls >= 4 and shape_score >= 2)
+            suit_count >= 9
+            or (
+                suit_count >= 8
+                and (
+                    hand_shanten >= 3
+                    or honor_count >= 1
+                    or _honitsu_should_build_suit_meld(hand, suit)
+                )
+            )
+            or (suit_count >= 7 and hand_shanten >= 3 and shape_score >= 2)
+            or (
+                suit_count >= 7
+                and hand_shanten <= 1
+                and balls >= 3
+                and shape_score >= 2
+            )
+            or (
+                suit_count >= 6
+                and balls >= 4
+                and (
+                    (shape_score >= 3 and hand_shanten >= 3)
+                    or (shape_score >= 2 and honor_count >= 1)
+                )
+            )
             or (suit_count >= 5 and honor_count >= 2 and balls >= 4 and shape_score >= 2)
         )
-        if not strong_side:
+        if not strong_side and not soft_far_lean:
             continue
-        targets = tuple(
-            tile_id
-            for tile_id in sorted((*suit, primary_honor))
-            if counts[tile_id] < 4
-        )
+        if soft_far_lean and not strong_side:
+            target_pool = set(direct_targets)
+            target_pool.update(tile_id for tile_id in suit if counts[tile_id] < 4)
+            if counts[primary_honor] < 4:
+                target_pool.add(primary_honor)
+            targets = tuple(sorted(target_pool))
+            factors = tuple(
+                _soft_suit_target_factor(
+                    tile_id,
+                    suit,
+                    primary_honor,
+                    direct_targets,
+                )
+                for tile_id in targets
+            )
+        else:
+            targets = tuple(
+                tile_id
+                for tile_id in sorted((*suit, primary_honor))
+                if counts[tile_id] < 4
+            )
+            factors = tuple(
+                1.0 if tile_id in direct_targets else 0.15
+                for tile_id in targets
+            )
         if not targets:
             continue
-        progress = _conditioned_area_probability(counts, targets, area, areas)
+        estimate = _next_area_estimate(
+            counts,
+            targets,
+            areas,
+            target_factors=factors,
+        )
+        progress = estimate.progress_probability
         off_count = sum(counts) - suit_count - honor_count
         score = (
             suit_count * 1.0
@@ -1214,17 +1347,42 @@ def _normal_side_plan(
             + progress * 4.0
             - off_count * 0.15
         )
-        candidates.append((score, progress, suit_count, -off_count, area, suit, targets))
+        candidates.append(
+            (
+                score,
+                progress,
+                suit_count,
+                -off_count,
+                estimate.area,
+                suit,
+                targets,
+                factors,
+            )
+        )
 
     if not candidates:
         return None
 
-    _, _, _, _, area, suit, targets = max(candidates)
+    _, _, _, _, area, suit, targets, factors = max(candidates)
     return NormalProgressPlan(
         f"normal_side_{_suit_name(suit)}_next_area",
         targets,
         suit,
+        factors,
     )
+
+
+def _soft_suit_target_factor(
+    tile_id: int,
+    suit: frozenset[int],
+    primary_honor: int,
+    direct_targets: tuple[int, ...],
+) -> float:
+    if tile_id in suit:
+        return 1.0 if tile_id in direct_targets else 0.25
+    if tile_id == primary_honor:
+        return 0.55
+    return 0.35 if tile_id in direct_targets else 0.0
 
 
 def _best_side_area_for_suit(
@@ -1302,12 +1460,27 @@ def _honitsu_progress_targets(
     )
 
 
+def _honitsu_progress_target_factors(
+    hand: TileSet,
+    route_name: str,
+    balls: int,
+    areas: tuple[tuple[int, ...], ...],
+    targets: tuple[int, ...],
+) -> tuple[float, ...]:
+    if not targets:
+        return ()
+    suit = _route_suit(route_name)
+    if balls >= 4 and _honitsu_should_build_suit_meld(hand, suit):
+        return (1.0,) * len(targets)
+    direct = set(improving_tiles(hand))
+    return tuple(1.0 if tile_id in direct else 0.15 for tile_id in targets)
+
+
 def _honitsu_should_build_suit_meld(hand: TileSet, suit: frozenset[int]) -> bool:
     suit_count = sum(hand.counts[tile_id] for tile_id in suit)
-    pairish = sum(1 for tile_id in suit if hand.counts[tile_id] >= 2)
     triplets = sum(1 for tile_id in suit if hand.counts[tile_id] >= 3)
     sequences = _suit_sequence_count(hand.counts, suit)
-    return suit_count >= 7 and (pairish + triplets + sequences) >= 3
+    return suit_count >= 8 and (triplets + sequences) >= 3
 
 
 def _suit_sequence_count(counts: tuple[int, ...], suit: frozenset[int]) -> int:

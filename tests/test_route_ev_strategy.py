@@ -646,6 +646,48 @@ class RouteEvStrategyTests(unittest.TestCase):
         self.assertEqual(2, decision.shanten_after)
         self.assertNotIn(decision.discard_tile, (24, 25, 26))
 
+    def test_random_review_does_not_count_entire_suit_as_direct_progress(self):
+        table = load_tables()["nyukyu_base_table.bytes"]
+
+        turn2 = choose_route_ev_area(
+            (2, 2, 6, 8, 9, 12, 12, 13, 14, 16, 17, 23, 25),
+            table,
+            balls=7,
+        )
+        turn3 = choose_route_ev_area(
+            (2, 2, 6, 8, 9, 9, 12, 12, 13, 14, 16, 17, 23),
+            table,
+            balls=6,
+        )
+
+        self.assertEqual(2, turn2.area)
+        self.assertEqual((7, 15, 24), turn2.target_tiles)
+        self.assertEqual(1300, turn2.target_weight)
+        self.assertEqual(2, turn3.area)
+        self.assertEqual((2, 7, 9, 15), turn3.target_tiles)
+        self.assertEqual(2100, turn3.target_weight)
+
+    def test_random_review_daisangen_and_yakuman_fallback_rules(self):
+        table = load_tables()["nyukyu_base_table.bytes"]
+
+        daisangen = choose_route_ev_area(
+            (4, 5, 14, 18, 20, 22, 28, 29, 30, 31, 32, 33, 33),
+            table,
+            balls=8,
+        )
+        fallback = choose_route_ev_discard(
+            (3, 5, 7, 9, 9, 11, 11, 12, 12, 14, 15, 16, 16, 27),
+            balls=5,
+            drawn_tile=11,
+        )
+
+        self.assertEqual(4, daisangen.area)
+        self.assertEqual((31, 32, 33), daisangen.target_tiles)
+        self.assertIn("daisangen", daisangen.reason)
+        self.assertEqual(3, fallback.discard_tile)
+        self.assertNotEqual(15, fallback.discard_tile)
+        self.assertIn("suuankou", fallback.reason)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1025,7 +1025,8 @@ def _render_replay_card(
     <div>
       <p class="eyebrow">Example #{index + 1}</p>
       <h2>{escape(_result_text(replay))}</h2>
-      <p class="subtle">seed={replay.seed} · {escape(replay.source_label)} · Dora: {_tile_label(replay.dora_id)} · Ura: {_tile_label(replay.ura_dora_id)} · {escape(riichi_meta)}</p>
+      <p class="subtle">seed={replay.seed} · {escape(replay.source_label)} · {escape(riichi_meta)}</p>
+      {_render_dora_strip(replay.dora_id, replay.ura_dora_id)}
     </div>
     <div class="score-box">{escape(_score_text(replay.score))}</div>
   </div>
@@ -1112,7 +1113,8 @@ def _render_bonus_hand(
     <div>
       <p class="eyebrow">{escape(mode_label)} #{replay.mode_index}</p>
       <h3>{escape(status)} {hold_badge}</h3>
-      <p>{escape(replay.source_label)} · Dora: {_tile_label(replay.dora_id)}</p>
+      <p>{escape(replay.source_label)}</p>
+      {_render_dora_strip(replay.dora_id, replay.ura_dora_id)}
     </div>
     <div class="bonus-result">
       <span class="result-pill {status_class}">{escape(_score_text(replay.score))}</span>
@@ -1136,6 +1138,27 @@ def _render_hand_panel(title: str, tiles: tuple[int, ...], *, aside: str = "") -
   <div class="tiles">{''.join(_tile_html(tile_id) for tile_id in tiles)}</div>
 </section>
 """
+
+
+def _render_dora_strip(dora_id: int | None, ura_dora_id: int | None) -> str:
+    return f"""
+<div class="dora-strip" aria-label="宝牌与里宝牌">
+  {_render_dora_item("宝牌", dora_id)}
+  {_render_dora_item("里宝牌", ura_dora_id)}
+</div>
+"""
+
+
+def _render_dora_item(label: str, tile_id: int | None) -> str:
+    state = " known" if tile_id is not None else " unknown"
+    tile_label = _tile_label(tile_id) if tile_id is not None else "未记录"
+    return (
+        f'<div class="dora-item{state}">'
+        f'<span class="dora-label">{escape(label)}</span>'
+        f'{_tile_html(tile_id)}'
+        f'<b>{escape(tile_label)}</b>'
+        "</div>"
+    )
 
 
 def _render_turns(replay: ReplayHand, table: NyukyuTable) -> str:
@@ -1917,6 +1940,47 @@ h1 {
 .replay-head h2 {
   margin-bottom: 6px;
   font-size: 24px;
+}
+
+.dora-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 11px;
+}
+
+.dora-item {
+  display: grid;
+  grid-template-columns: auto 30px auto;
+  gap: 7px;
+  align-items: center;
+  min-height: 42px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f7f9f8;
+}
+
+.dora-item .tile {
+  width: 28px;
+  height: 38px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.dora-item.unknown .tile {
+  color: var(--muted);
+  background: #edf1ef;
+}
+
+.dora-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.dora-item b {
+  font-size: 13px;
 }
 
 .score-box {

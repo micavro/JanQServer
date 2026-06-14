@@ -23,13 +23,24 @@ yakuman routes, honitsu routes, and ordinary hand efficiency, so an apparently
 isolated tile can be kept when it makes the next area's distribution materially
 better.
 
+Area targets are not all equal:
+
+- First-order tiles that reduce shanten receive full weight.
+- Second-order shape improvements receive only a small fraction of full weight.
+- A whole suit is never reported as full-value progress merely because a
+  honitsu fallback exists.
+- A far-away hand may lean toward its dominant suit, but off-suit first-order
+  improvements remain in the comparison.
+
 ## Route gates
 
 The prototype considers:
 
 - Suuankou: at least four pair/triplet-like groups and missing at most four
   tiles.
-- Daisangen: at least five dragon tiles and missing at most four route tiles.
+- Daisangen: missing tiles are computed from the three dragon triplets plus one
+  non-dragon meld and one non-dragon pair. This avoids using ordinary shanten
+  as an inaccurate proxy for the outside shape.
 - Chuuren: at least nine tiles in one suit and missing at most four route tiles.
 - Kokushi: missing at most four terminal/honor requirements.
 - Honitsu: detected but currently left to the public baseline for final action,
@@ -45,6 +56,15 @@ The prototype considers:
 - Ordinary tenpai declares reach when the remaining balls are low. With enough
   balls, the strategy can still look for improvement, but it will not casually
   dismantle a completed tenpai for a distant route.
+
+## Hybrid fallback preservation
+
+When two yakuman discard candidates retain the same route distance and one is
+within 90% of the best projected completion probability, the strategy compares
+fallback shape before chasing a tiny probability difference. It prefers an
+off-suit singleton discard over breaking a strong same-suit or chiitoitsu
+fallback. This keeps yakuman pressure high without needlessly destroying
+honitsu, chinitsu, or seven-pairs recovery routes.
 
 ## Current result
 

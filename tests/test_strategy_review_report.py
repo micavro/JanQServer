@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from janq_lab.strategy.review_regressions import REVIEW_REGRESSION_CASES
@@ -32,6 +33,24 @@ class StrategyReviewReportTests(unittest.TestCase):
         self.assertIn("允许答案", html)
         self.assertIn("random-2-turn-9-discard", html)
         self.assertIn("第四张南必须直接摸切", html)
+        self.assertIn('class="dora-strip"', html)
+        self.assertIn("宝牌", html)
+        self.assertIn("里宝牌", html)
+
+    def test_html_renders_known_dora_as_tiles(self):
+        case = replace(
+            REVIEW_REGRESSION_CASES[0],
+            dora_id=0,
+            ura_dora_id=33,
+        )
+        results = evaluate_strategy_review_cases((case,))
+
+        html = render_strategy_review_html(results)
+
+        self.assertIn("tile-id-0", html)
+        self.assertIn("tile-id-33", html)
+        self.assertIn("1万", html)
+        self.assertIn("中", html)
 
     def test_write_report_creates_parent_directory(self):
         with tempfile.TemporaryDirectory() as tmp:

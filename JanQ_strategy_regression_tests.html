@@ -140,6 +140,45 @@ h2 { margin-bottom: 6px; font-size: 20px; }
 .state-strip span { color: var(--muted); }
 .state-strip b { margin-left: 5px; color: var(--ink); }
 
+.dora-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.dora-item {
+  display: grid;
+  grid-template-columns: auto 30px auto;
+  gap: 7px;
+  align-items: center;
+  min-height: 42px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f7f9f8;
+}
+
+.dora-item > span:first-child {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.dora-item .tile {
+  width: 28px;
+  height: 38px;
+}
+
+.dora-item.unknown .tile {
+  color: var(--muted);
+  background: #edf1ef;
+}
+
+.dora-item b {
+  font-size: 13px;
+}
+
 .hand-state {
   align-items: stretch;
   margin-bottom: 14px;
@@ -293,8 +332,8 @@ dd.forbidden { color: var(--red); font-weight: 800; }
         <p>每个案例只包含决策当时的状态，不依赖完整牌局历史。</p>
       </div>
       <div class="summary">
-        <span><b>16</b>案例</span>
-        <span class="pass"><b>16</b>通过</span>
+        <span><b>23</b>案例</span>
+        <span class="pass"><b>23</b>通过</span>
         <span class="fail"><b>0</b>失败</span>
       </div>
     </header>
@@ -318,19 +357,20 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <span>剩余球数 <b>8</b></span>
     <span>立直状态 <b>未立直</b></span>
   </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-19 art" title="2饼"></span><b>2饼</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-12 art" title="4索"></span><b>4索</b></div></section>
   <section class="hand-state">
     <div class="hand-block">
       <span>当前手牌 13张</span>
       <div class="tiles"><span class="tile tile-id-0 art" title="1万"></span><span class="tile tile-id-0 art" title="1万"></span><span class="tile tile-id-1 art" title="2万"></span><span class="tile tile-id-2 art" title="3万"></span><span class="tile tile-id-3 art" title="4万"></span><span class="tile tile-id-4 art" title="5万"></span><span class="tile tile-id-7 art" title="8万"></span><span class="tile tile-id-15 art" title="7索"></span><span class="tile tile-id-19 art" title="2饼"></span><span class="tile tile-id-23 art" title="6饼"></span><span class="tile tile-id-26 art" title="9饼"></span><span class="tile tile-id-31 art" title="白"></span><span class="tile tile-id-32 art" title="发"></span></div>
     </div>
-    
+
   </section>
   <dl class="decision-grid">
     <div><dt>当前策略答案</dt><dd class="choice">区域 1</dd></div>
     <div><dt>禁止答案</dt><dd class="forbidden">区域 6</dd></div>
     <div><dt>允许答案</dt><dd>区域 1</dd></div>
-    <div><dt>策略理由</dt><dd>normal_side_man_next_area:progress=1.000:alt=0.670:win=0.000:protect=0.000:v=1.000</dd></div>
-    <div><dt>目标牌</dt><dd>1万、2万、3万、4万、5万、6万、7万、8万、9万、东</dd></div><div><dt>目标权重</dt><dd>10000 / 10000</dd></div>
+    <div><dt>策略理由</dt><dd>normal_side_man_next_area:progress=0.830:alt=0.585:win=0.000:protect=0.000:v=0.830</dd></div>
+    <div><dt>目标牌</dt><dd>1万、2万、3万、4万、5万、6万、7万、8万、9万、东</dd></div><div><dt>目标权重</dt><dd>8300 / 10000</dd></div>
   </dl>
   <section class="review-note">
     <div><b>反对依据</b><p>万字已有七张且球数充足，不能继续按宽泛普通进张选择区域6。</p></div>
@@ -353,12 +393,13 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <span>剩余球数 <b>7</b></span>
     <span>立直状态 <b>未立直</b></span>
   </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-19 art" title="2饼"></span><b>2饼</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-12 art" title="4索"></span><b>4索</b></div></section>
   <section class="hand-state">
     <div class="hand-block">
       <span>摸前手牌 13张</span>
       <div class="tiles"><span class="tile tile-id-0 art" title="1万"></span><span class="tile tile-id-0 art" title="1万"></span><span class="tile tile-id-1 art" title="2万"></span><span class="tile tile-id-2 art" title="3万"></span><span class="tile tile-id-3 art" title="4万"></span><span class="tile tile-id-4 art" title="5万"></span><span class="tile tile-id-7 art" title="8万"></span><span class="tile tile-id-15 art" title="7索"></span><span class="tile tile-id-19 art" title="2饼"></span><span class="tile tile-id-23 art" title="6饼"></span><span class="tile tile-id-26 art" title="9饼"></span><span class="tile tile-id-31 art" title="白"></span><span class="tile tile-id-32 art" title="发"></span></div>
     </div>
-    
+
         <div class="draw-block">
           <span>摸到第14张</span>
           <span class="tile tile-id-21 drawn art" title="4饼"></span>
@@ -368,7 +409,7 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <div><dt>当前策略答案</dt><dd class="choice">白(id=31)</dd></div>
     <div><dt>禁止答案</dt><dd class="forbidden">9饼(id=26)</dd></div>
     <div><dt>允许答案</dt><dd>白(id=31)、发(id=32)</dd></div>
-    <div><dt>策略理由</dt><dd>route_ev_discard:normal_side_man_next_area:area=1:p=1.000:alt=0.670:protect=0.000</dd></div>
+    <div><dt>策略理由</dt><dd>route_ev_discard:normal_side_man_next_area:area=1:p=0.830:alt=0.585:protect=0.000</dd></div>
     <div><dt>舍后向听</dt><dd>4</dd></div><div><dt>舍后受入</dt><dd>无</dd></div><div><dt>本球立直</dt><dd>否</dd></div>
   </dl>
   <section class="review-note">
@@ -392,12 +433,13 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <span>剩余球数 <b>5</b></span>
     <span>立直状态 <b>未立直</b></span>
   </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-19 art" title="2饼"></span><b>2饼</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-12 art" title="4索"></span><b>4索</b></div></section>
   <section class="hand-state">
     <div class="hand-block">
       <span>摸前手牌 13张</span>
       <div class="tiles"><span class="tile tile-id-0 art" title="1万"></span><span class="tile tile-id-0 art" title="1万"></span><span class="tile tile-id-1 art" title="2万"></span><span class="tile tile-id-2 art" title="3万"></span><span class="tile tile-id-3 art" title="4万"></span><span class="tile tile-id-4 art" title="5万"></span><span class="tile tile-id-7 art" title="8万"></span><span class="tile tile-id-15 art" title="7索"></span><span class="tile tile-id-19 art" title="2饼"></span><span class="tile tile-id-21 art" title="4饼"></span><span class="tile tile-id-23 art" title="6饼"></span><span class="tile tile-id-23 art" title="6饼"></span><span class="tile tile-id-31 art" title="白"></span></div>
     </div>
-    
+
         <div class="draw-block">
           <span>摸到第14张</span>
           <span class="tile tile-id-8 drawn art" title="9万"></span>
@@ -407,7 +449,7 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <div><dt>当前策略答案</dt><dd class="choice">白(id=31)</dd></div>
     <div><dt>禁止答案</dt><dd class="forbidden">7索(id=15)</dd></div>
     <div><dt>允许答案</dt><dd>白(id=31)</dd></div>
-    <div><dt>策略理由</dt><dd>route_ev_discard:normal_side_man_next_area:area=1:p=1.000:alt=0.670:protect=0.000</dd></div>
+    <div><dt>策略理由</dt><dd>route_ev_discard:normal_next_area:area=1:p=0.370:alt=0.250:protect=0.000</dd></div>
     <div><dt>舍后向听</dt><dd>2</dd></div><div><dt>舍后受入</dt><dd>无</dd></div><div><dt>本球立直</dt><dd>否</dd></div>
   </dl>
   <section class="review-note">
@@ -431,12 +473,13 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <span>剩余球数 <b>4</b></span>
     <span>立直状态 <b>未立直</b></span>
   </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-19 art" title="2饼"></span><b>2饼</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-12 art" title="4索"></span><b>4索</b></div></section>
   <section class="hand-state">
     <div class="hand-block">
       <span>摸前手牌 13张</span>
       <div class="tiles"><span class="tile tile-id-0 art" title="1万"></span><span class="tile tile-id-0 art" title="1万"></span><span class="tile tile-id-1 art" title="2万"></span><span class="tile tile-id-2 art" title="3万"></span><span class="tile tile-id-3 art" title="4万"></span><span class="tile tile-id-4 art" title="5万"></span><span class="tile tile-id-7 art" title="8万"></span><span class="tile tile-id-8 art" title="9万"></span><span class="tile tile-id-19 art" title="2饼"></span><span class="tile tile-id-21 art" title="4饼"></span><span class="tile tile-id-23 art" title="6饼"></span><span class="tile tile-id-23 art" title="6饼"></span><span class="tile tile-id-31 art" title="白"></span></div>
     </div>
-    
+
         <div class="draw-block">
           <span>摸到第14张</span>
           <span class="tile tile-id-27 drawn art" title="东"></span>
@@ -446,7 +489,7 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <div><dt>当前策略答案</dt><dd class="choice">白(id=31)</dd></div>
     <div><dt>禁止答案</dt><dd class="forbidden">东(id=27)</dd></div>
     <div><dt>允许答案</dt><dd>白(id=31)</dd></div>
-    <div><dt>策略理由</dt><dd>route_ev_discard:normal_side_man_next_area:area=1:p=1.000:alt=0.670:protect=0.000</dd></div>
+    <div><dt>策略理由</dt><dd>route_ev_discard:normal_side_man_next_area:area=1:p=0.465:alt=0.313:protect=0.000</dd></div>
     <div><dt>舍后向听</dt><dd>2</dd></div><div><dt>舍后受入</dt><dd>无</dd></div><div><dt>本球立直</dt><dd>否</dd></div>
   </dl>
   <section class="review-note">
@@ -470,12 +513,13 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <span>剩余球数 <b>7</b></span>
     <span>立直状态 <b>未立直</b></span>
   </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-3 art" title="4万"></span><b>4万</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-13 art" title="5索"></span><b>5索</b></div></section>
   <section class="hand-state">
     <div class="hand-block">
       <span>摸前手牌 13张</span>
       <div class="tiles"><span class="tile tile-id-1 art" title="2万"></span><span class="tile tile-id-1 art" title="2万"></span><span class="tile tile-id-6 art" title="7万"></span><span class="tile tile-id-8 art" title="9万"></span><span class="tile tile-id-9 art" title="1索"></span><span class="tile tile-id-10 art" title="2索"></span><span class="tile tile-id-10 art" title="2索"></span><span class="tile tile-id-13 art" title="5索"></span><span class="tile tile-id-20 art" title="3饼"></span><span class="tile tile-id-27 art" title="东"></span><span class="tile tile-id-28 art" title="南"></span><span class="tile tile-id-29 art" title="西"></span><span class="tile tile-id-31 art" title="白"></span></div>
     </div>
-    
+
         <div class="draw-block">
           <span>摸到第14张</span>
           <span class="tile tile-id-5 drawn art" title="6万"></span>
@@ -509,12 +553,13 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <span>剩余球数 <b>7</b></span>
     <span>立直状态 <b>未立直</b></span>
   </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-17 art" title="9索"></span><b>9索</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-16 art" title="8索"></span><b>8索</b></div></section>
   <section class="hand-state">
     <div class="hand-block">
       <span>摸前手牌 13张</span>
       <div class="tiles"><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-14 art" title="6索"></span><span class="tile tile-id-17 art" title="9索"></span><span class="tile tile-id-18 art" title="1饼"></span><span class="tile tile-id-22 art" title="5饼"></span><span class="tile tile-id-22 art" title="5饼"></span><span class="tile tile-id-23 art" title="6饼"></span><span class="tile tile-id-24 art" title="7饼"></span><span class="tile tile-id-26 art" title="9饼"></span><span class="tile tile-id-27 art" title="东"></span><span class="tile tile-id-30 art" title="北"></span><span class="tile tile-id-31 art" title="白"></span><span class="tile tile-id-32 art" title="发"></span></div>
     </div>
-    
+
         <div class="draw-block">
           <span>摸到第14张</span>
           <span class="tile tile-id-30 drawn art" title="北"></span>
@@ -548,12 +593,13 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <span>剩余球数 <b>7</b></span>
     <span>立直状态 <b>未立直</b></span>
   </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-28 art" title="南"></span><b>南</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-22 art" title="5饼"></span><b>5饼</b></div></section>
   <section class="hand-state">
     <div class="hand-block">
       <span>摸前手牌 13张</span>
       <div class="tiles"><span class="tile tile-id-1 art" title="2万"></span><span class="tile tile-id-3 art" title="4万"></span><span class="tile tile-id-14 art" title="6索"></span><span class="tile tile-id-16 art" title="8索"></span><span class="tile tile-id-18 art" title="1饼"></span><span class="tile tile-id-19 art" title="2饼"></span><span class="tile tile-id-21 art" title="4饼"></span><span class="tile tile-id-21 art" title="4饼"></span><span class="tile tile-id-22 art" title="5饼"></span><span class="tile tile-id-26 art" title="9饼"></span><span class="tile tile-id-28 art" title="南"></span><span class="tile tile-id-30 art" title="北"></span><span class="tile tile-id-31 art" title="白"></span></div>
     </div>
-    
+
         <div class="draw-block">
           <span>摸到第14张</span>
           <span class="tile tile-id-30 drawn art" title="北"></span>
@@ -563,7 +609,7 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <div><dt>当前策略答案</dt><dd class="choice">白(id=31)</dd></div>
     <div><dt>禁止答案</dt><dd class="forbidden">南(id=28)</dd></div>
     <div><dt>允许答案</dt><dd>白(id=31)</dd></div>
-    <div><dt>策略理由</dt><dd>route_ev_discard:normal_next_area:area=7:p=0.450:alt=0.410:protect=0.000</dd></div>
+    <div><dt>策略理由</dt><dd>route_ev_discard:normal_side_pin_next_area:area=7:p=0.497:alt=0.410:protect=0.000</dd></div>
     <div><dt>舍后向听</dt><dd>3</dd></div><div><dt>舍后受入</dt><dd>无</dd></div><div><dt>本球立直</dt><dd>否</dd></div>
   </dl>
   <section class="review-note">
@@ -587,12 +633,13 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <span>剩余球数 <b>6</b></span>
     <span>立直状态 <b>未立直</b></span>
   </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-28 art" title="南"></span><b>南</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-22 art" title="5饼"></span><b>5饼</b></div></section>
   <section class="hand-state">
     <div class="hand-block">
       <span>摸前手牌 13张</span>
       <div class="tiles"><span class="tile tile-id-1 art" title="2万"></span><span class="tile tile-id-3 art" title="4万"></span><span class="tile tile-id-14 art" title="6索"></span><span class="tile tile-id-16 art" title="8索"></span><span class="tile tile-id-18 art" title="1饼"></span><span class="tile tile-id-19 art" title="2饼"></span><span class="tile tile-id-21 art" title="4饼"></span><span class="tile tile-id-21 art" title="4饼"></span><span class="tile tile-id-22 art" title="5饼"></span><span class="tile tile-id-26 art" title="9饼"></span><span class="tile tile-id-30 art" title="北"></span><span class="tile tile-id-30 art" title="北"></span><span class="tile tile-id-31 art" title="白"></span></div>
     </div>
-    
+
         <div class="draw-block">
           <span>摸到第14张</span>
           <span class="tile tile-id-24 drawn art" title="7饼"></span>
@@ -602,7 +649,7 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <div><dt>当前策略答案</dt><dd class="choice">白(id=31)</dd></div>
     <div><dt>禁止答案</dt><dd class="forbidden">8索(id=16)</dd></div>
     <div><dt>允许答案</dt><dd>未限制，只要不命中禁选</dd></div>
-    <div><dt>策略理由</dt><dd>route_ev_discard:normal_side_pin_next_area:area=7:p=1.000:alt=0.670:protect=0.000</dd></div>
+    <div><dt>策略理由</dt><dd>route_ev_discard:normal_side_pin_next_area:area=7:p=0.588:alt=0.410:protect=0.000</dd></div>
     <div><dt>舍后向听</dt><dd>3</dd></div><div><dt>舍后受入</dt><dd>无</dd></div><div><dt>本球立直</dt><dd>否</dd></div>
   </dl>
   <section class="review-note">
@@ -626,12 +673,13 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <span>剩余球数 <b>8</b></span>
     <span>立直状态 <b>未立直</b></span>
   </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-0 art" title="1万"></span><b>1万</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-26 art" title="9饼"></span><b>9饼</b></div></section>
   <section class="hand-state">
     <div class="hand-block">
       <span>当前手牌 13张</span>
       <div class="tiles"><span class="tile tile-id-3 art" title="4万"></span><span class="tile tile-id-6 art" title="7万"></span><span class="tile tile-id-9 art" title="1索"></span><span class="tile tile-id-10 art" title="2索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-13 art" title="5索"></span><span class="tile tile-id-14 art" title="6索"></span><span class="tile tile-id-17 art" title="9索"></span><span class="tile tile-id-22 art" title="5饼"></span><span class="tile tile-id-23 art" title="6饼"></span><span class="tile tile-id-25 art" title="8饼"></span><span class="tile tile-id-31 art" title="白"></span><span class="tile tile-id-31 art" title="白"></span></div>
     </div>
-    
+
   </section>
   <dl class="decision-grid">
     <div><dt>当前策略答案</dt><dd class="choice">区域 4</dd></div>
@@ -661,12 +709,13 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <span>剩余球数 <b>4</b></span>
     <span>立直状态 <b>未立直</b></span>
   </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-0 art" title="1万"></span><b>1万</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-26 art" title="9饼"></span><b>9饼</b></div></section>
   <section class="hand-state">
     <div class="hand-block">
       <span>摸前手牌 13张</span>
       <div class="tiles"><span class="tile tile-id-9 art" title="1索"></span><span class="tile tile-id-10 art" title="2索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-13 art" title="5索"></span><span class="tile tile-id-14 art" title="6索"></span><span class="tile tile-id-22 art" title="5饼"></span><span class="tile tile-id-23 art" title="6饼"></span><span class="tile tile-id-24 art" title="7饼"></span><span class="tile tile-id-25 art" title="8饼"></span><span class="tile tile-id-26 art" title="9饼"></span><span class="tile tile-id-30 art" title="北"></span><span class="tile tile-id-31 art" title="白"></span><span class="tile tile-id-31 art" title="白"></span></div>
     </div>
-    
+
         <div class="draw-block">
           <span>摸到第14张</span>
           <span class="tile tile-id-26 drawn art" title="9饼"></span>
@@ -676,7 +725,7 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <div><dt>当前策略答案</dt><dd class="choice">1索(id=9)</dd></div>
     <div><dt>禁止答案</dt><dd class="forbidden">北(id=30)</dd></div>
     <div><dt>允许答案</dt><dd>1索(id=9)、2索(id=10)</dd></div>
-    <div><dt>策略理由</dt><dd>route_ev_discard:normal_side_pin_next_area:area=7:p=1.000:alt=0.670:protect=0.000</dd></div>
+    <div><dt>策略理由</dt><dd>route_ev_discard:normal_side_pin_next_area:area=7:p=0.941:alt=0.466:protect=0.000</dd></div>
     <div><dt>舍后向听</dt><dd>2</dd></div><div><dt>舍后受入</dt><dd>无</dd></div><div><dt>本球立直</dt><dd>否</dd></div>
   </dl>
   <section class="review-note">
@@ -700,12 +749,13 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <span>剩余球数 <b>3</b></span>
     <span>立直状态 <b>未立直</b></span>
   </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-0 art" title="1万"></span><b>1万</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-26 art" title="9饼"></span><b>9饼</b></div></section>
   <section class="hand-state">
     <div class="hand-block">
       <span>摸前手牌 13张</span>
       <div class="tiles"><span class="tile tile-id-9 art" title="1索"></span><span class="tile tile-id-10 art" title="2索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-13 art" title="5索"></span><span class="tile tile-id-14 art" title="6索"></span><span class="tile tile-id-22 art" title="5饼"></span><span class="tile tile-id-23 art" title="6饼"></span><span class="tile tile-id-24 art" title="7饼"></span><span class="tile tile-id-25 art" title="8饼"></span><span class="tile tile-id-26 art" title="9饼"></span><span class="tile tile-id-26 art" title="9饼"></span><span class="tile tile-id-31 art" title="白"></span><span class="tile tile-id-31 art" title="白"></span></div>
     </div>
-    
+
         <div class="draw-block">
           <span>摸到第14张</span>
           <span class="tile tile-id-23 drawn art" title="6饼"></span>
@@ -715,7 +765,7 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <div><dt>当前策略答案</dt><dd class="choice">2索(id=10)</dd></div>
     <div><dt>禁止答案</dt><dd class="forbidden">9饼(id=26)</dd></div>
     <div><dt>允许答案</dt><dd>1索(id=9)、2索(id=10)</dd></div>
-    <div><dt>策略理由</dt><dd>route_ev_discard:normal_side_pin_next_area:area=7:p=1.000:alt=0.670:protect=0.000</dd></div>
+    <div><dt>策略理由</dt><dd>route_ev_discard:normal_side_pin_next_area:area=7:p=0.422:alt=0.211:protect=0.000</dd></div>
     <div><dt>舍后向听</dt><dd>1</dd></div><div><dt>舍后受入</dt><dd>无</dd></div><div><dt>本球立直</dt><dd>否</dd></div>
   </dl>
   <section class="review-note">
@@ -739,12 +789,13 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <span>剩余球数 <b>4</b></span>
     <span>立直状态 <b>未立直</b></span>
   </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-28 art" title="南"></span><b>南</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-10 art" title="2索"></span><b>2索</b></div></section>
   <section class="hand-state">
     <div class="hand-block">
       <span>摸前手牌 13张</span>
       <div class="tiles"><span class="tile tile-id-3 art" title="4万"></span><span class="tile tile-id-5 art" title="6万"></span><span class="tile tile-id-6 art" title="7万"></span><span class="tile tile-id-6 art" title="7万"></span><span class="tile tile-id-9 art" title="1索"></span><span class="tile tile-id-11 art" title="3索"></span><span class="tile tile-id-11 art" title="3索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-16 art" title="8索"></span><span class="tile tile-id-16 art" title="8索"></span><span class="tile tile-id-24 art" title="7饼"></span><span class="tile tile-id-25 art" title="8饼"></span><span class="tile tile-id-26 art" title="9饼"></span></div>
     </div>
-    
+
         <div class="draw-block">
           <span>摸到第14张</span>
           <span class="tile tile-id-11 drawn art" title="3索"></span>
@@ -754,7 +805,7 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <div><dt>当前策略答案</dt><dd class="choice">4索(id=12)</dd></div>
     <div><dt>禁止答案</dt><dd class="forbidden">7饼(id=24)、8饼(id=25)、9饼(id=26)</dd></div>
     <div><dt>允许答案</dt><dd>4索(id=12)</dd></div>
-    <div><dt>策略理由</dt><dd>route_ev_discard:normal_side_sou_next_area:area=3:p=0.820:alt=0.620:protect=0.120</dd></div>
+    <div><dt>策略理由</dt><dd>route_ev_discard:normal_next_area:area=2:p=0.189:alt=0.170:protect=0.050</dd></div>
     <div><dt>舍后向听</dt><dd>1</dd></div><div><dt>舍后受入</dt><dd>无</dd></div><div><dt>本球立直</dt><dd>否</dd></div>
   </dl>
   <section class="review-note">
@@ -778,12 +829,13 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <span>剩余球数 <b>7</b></span>
     <span>立直状态 <b>未立直</b></span>
   </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-8 art" title="9万"></span><b>9万</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-29 art" title="西"></span><b>西</b></div></section>
   <section class="hand-state">
     <div class="hand-block">
       <span>摸前手牌 13张</span>
       <div class="tiles"><span class="tile tile-id-3 art" title="4万"></span><span class="tile tile-id-5 art" title="6万"></span><span class="tile tile-id-10 art" title="2索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-14 art" title="6索"></span><span class="tile tile-id-21 art" title="4饼"></span><span class="tile tile-id-22 art" title="5饼"></span><span class="tile tile-id-26 art" title="9饼"></span><span class="tile tile-id-28 art" title="南"></span><span class="tile tile-id-28 art" title="南"></span><span class="tile tile-id-28 art" title="南"></span><span class="tile tile-id-29 art" title="西"></span></div>
     </div>
-    
+
         <div class="draw-block">
           <span>摸到第14张</span>
           <span class="tile tile-id-12 drawn art" title="4索"></span>
@@ -793,7 +845,7 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <div><dt>当前策略答案</dt><dd class="choice">9饼(id=26)</dd></div>
     <div><dt>禁止答案</dt><dd class="forbidden">4索(id=12)</dd></div>
     <div><dt>允许答案</dt><dd>4万(id=3)、6万(id=5)、9饼(id=26)、西(id=29)</dd></div>
-    <div><dt>策略理由</dt><dd>route_ev_discard:normal_side_sou_next_area:area=3:p=0.820:alt=0.620:protect=0.320</dd></div>
+    <div><dt>策略理由</dt><dd>route_ev_discard:normal_side_sou_next_area:area=3:p=0.446:alt=0.297:protect=0.320</dd></div>
     <div><dt>舍后向听</dt><dd>2</dd></div><div><dt>舍后受入</dt><dd>无</dd></div><div><dt>本球立直</dt><dd>否</dd></div>
   </dl>
   <section class="review-note">
@@ -817,12 +869,13 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <span>剩余球数 <b>6</b></span>
     <span>立直状态 <b>未立直</b></span>
   </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-8 art" title="9万"></span><b>9万</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-29 art" title="西"></span><b>西</b></div></section>
   <section class="hand-state">
     <div class="hand-block">
       <span>摸前手牌 13张</span>
       <div class="tiles"><span class="tile tile-id-3 art" title="4万"></span><span class="tile tile-id-5 art" title="6万"></span><span class="tile tile-id-10 art" title="2索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-14 art" title="6索"></span><span class="tile tile-id-21 art" title="4饼"></span><span class="tile tile-id-22 art" title="5饼"></span><span class="tile tile-id-26 art" title="9饼"></span><span class="tile tile-id-28 art" title="南"></span><span class="tile tile-id-28 art" title="南"></span><span class="tile tile-id-28 art" title="南"></span><span class="tile tile-id-29 art" title="西"></span></div>
     </div>
-    
+
         <div class="draw-block">
           <span>摸到第14张</span>
           <span class="tile tile-id-13 drawn art" title="5索"></span>
@@ -832,7 +885,7 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <div><dt>当前策略答案</dt><dd class="choice">9饼(id=26)</dd></div>
     <div><dt>禁止答案</dt><dd class="forbidden">4索(id=12)、5索(id=13)</dd></div>
     <div><dt>允许答案</dt><dd>4万(id=3)、6万(id=5)、4饼(id=21)、5饼(id=22)、9饼(id=26)、西(id=29)</dd></div>
-    <div><dt>策略理由</dt><dd>route_ev_discard:normal_side_sou_next_area:area=3:p=0.820:alt=0.620:protect=0.200</dd></div>
+    <div><dt>策略理由</dt><dd>route_ev_discard:normal_side_sou_next_area:area=3:p=0.438:alt=0.229:protect=0.200</dd></div>
     <div><dt>舍后向听</dt><dd>2</dd></div><div><dt>舍后受入</dt><dd>无</dd></div><div><dt>本球立直</dt><dd>否</dd></div>
   </dl>
   <section class="review-note">
@@ -856,12 +909,13 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <span>剩余球数 <b>1</b></span>
     <span>立直状态 <b>未立直</b></span>
   </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-8 art" title="9万"></span><b>9万</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-29 art" title="西"></span><b>西</b></div></section>
   <section class="hand-state">
     <div class="hand-block">
       <span>摸前手牌 13张</span>
       <div class="tiles"><span class="tile tile-id-3 art" title="4万"></span><span class="tile tile-id-5 art" title="6万"></span><span class="tile tile-id-10 art" title="2索"></span><span class="tile tile-id-10 art" title="2索"></span><span class="tile tile-id-11 art" title="3索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-14 art" title="6索"></span><span class="tile tile-id-14 art" title="6索"></span><span class="tile tile-id-21 art" title="4饼"></span><span class="tile tile-id-28 art" title="南"></span><span class="tile tile-id-28 art" title="南"></span><span class="tile tile-id-28 art" title="南"></span></div>
     </div>
-    
+
         <div class="draw-block">
           <span>摸到第14张</span>
           <span class="tile tile-id-28 drawn art" title="南"></span>
@@ -895,12 +949,13 @@ dd.forbidden { color: var(--red); font-weight: 800; }
     <span>剩余球数 <b>5</b></span>
     <span>立直状态 <b>未立直</b></span>
   </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-28 art" title="南"></span><b>南</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-10 art" title="2索"></span><b>2索</b></div></section>
   <section class="hand-state">
     <div class="hand-block">
       <span>摸前手牌 13张</span>
       <div class="tiles"><span class="tile tile-id-1 art" title="2万"></span><span class="tile tile-id-3 art" title="4万"></span><span class="tile tile-id-5 art" title="6万"></span><span class="tile tile-id-6 art" title="7万"></span><span class="tile tile-id-9 art" title="1索"></span><span class="tile tile-id-11 art" title="3索"></span><span class="tile tile-id-11 art" title="3索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-16 art" title="8索"></span><span class="tile tile-id-16 art" title="8索"></span><span class="tile tile-id-24 art" title="7饼"></span><span class="tile tile-id-25 art" title="8饼"></span><span class="tile tile-id-26 art" title="9饼"></span></div>
     </div>
-    
+
         <div class="draw-block">
           <span>摸到第14张</span>
           <span class="tile tile-id-6 drawn art" title="7万"></span>
@@ -916,6 +971,266 @@ dd.forbidden { color: var(--red); font-weight: 800; }
   <section class="review-note">
     <div><b>反对依据</b><p>已无特殊路线，应比较切1索与切2万后的向听、进张和后续区域改良。</p></div>
     <div><b>通用规则</b><p>普通效率排序为形状、向听、有效进张、区域概率。</p></div>
+  </section>
+</article>
+
+
+<article class="case pass" data-status="pass">
+  <div class="case-head">
+    <div>
+      <p class="eyebrow">#17 · random-5-turn-1-area</p>
+      <h2>四张三元牌且八球时优先大三元</h2>
+      <p class="source">random replay sample 5 turn 1</p>
+    </div>
+    <span class="status pass">通过</span>
+  </div>
+  <div class="state-strip">
+    <span>决策类型 <b>发射区域</b></span>
+    <span>剩余球数 <b>8</b></span>
+    <span>立直状态 <b>未立直</b></span>
+  </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-8 art" title="9万"></span><b>9万</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-26 art" title="9饼"></span><b>9饼</b></div></section>
+  <section class="hand-state">
+    <div class="hand-block">
+      <span>当前手牌 13张</span>
+      <div class="tiles"><span class="tile tile-id-4 art" title="5万"></span><span class="tile tile-id-5 art" title="6万"></span><span class="tile tile-id-14 art" title="6索"></span><span class="tile tile-id-18 art" title="1饼"></span><span class="tile tile-id-20 art" title="3饼"></span><span class="tile tile-id-22 art" title="5饼"></span><span class="tile tile-id-28 art" title="南"></span><span class="tile tile-id-29 art" title="西"></span><span class="tile tile-id-30 art" title="北"></span><span class="tile tile-id-31 art" title="白"></span><span class="tile tile-id-32 art" title="发"></span><span class="tile tile-id-33 art" title="中"></span><span class="tile tile-id-33 art" title="中"></span></div>
+    </div>
+
+  </section>
+  <dl class="decision-grid">
+    <div><dt>当前策略答案</dt><dd class="choice">区域 4</dd></div>
+    <div><dt>禁止答案</dt><dd class="forbidden">区域 5</dd></div>
+    <div><dt>允许答案</dt><dd>区域 4</dd></div>
+    <div><dt>策略理由</dt><dd>yakuman_route:daisangen:progress=0.600:alt=0.000:win=0.000:protect=0.000:v=0.600</dd></div>
+    <div><dt>目标牌</dt><dd>白、发、中</dd></div><div><dt>目标权重</dt><dd>6000 / 10000</dd></div>
+  </dl>
+  <section class="review-note">
+    <div><b>反对依据</b><p>已有四张三元牌和红中对子；国士缺少多张低概率边牌，不应压过大三元。</p></div>
+    <div><b>通用规则</b><p>大三元缺牌数按三组龙刻子加外部一面子一雀头独立计算，满足球数时优先区域4。</p></div>
+  </section>
+</article>
+
+
+<article class="case pass" data-status="pass">
+  <div class="case-head">
+    <div>
+      <p class="eyebrow">#18 · random-6-turn-2-area</p>
+      <h2>二向听时按直接进张选择区域</h2>
+      <p class="source">random replay sample 6 turn 2</p>
+    </div>
+    <span class="status pass">通过</span>
+  </div>
+  <div class="state-strip">
+    <span>决策类型 <b>发射区域</b></span>
+    <span>剩余球数 <b>7</b></span>
+    <span>立直状态 <b>未立直</b></span>
+  </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-7 art" title="8万"></span><b>8万</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-26 art" title="9饼"></span><b>9饼</b></div></section>
+  <section class="hand-state">
+    <div class="hand-block">
+      <span>当前手牌 13张</span>
+      <div class="tiles"><span class="tile tile-id-2 art" title="3万"></span><span class="tile tile-id-2 art" title="3万"></span><span class="tile tile-id-6 art" title="7万"></span><span class="tile tile-id-8 art" title="9万"></span><span class="tile tile-id-9 art" title="1索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-13 art" title="5索"></span><span class="tile tile-id-14 art" title="6索"></span><span class="tile tile-id-16 art" title="8索"></span><span class="tile tile-id-17 art" title="9索"></span><span class="tile tile-id-23 art" title="6饼"></span><span class="tile tile-id-25 art" title="8饼"></span></div>
+    </div>
+
+  </section>
+  <dl class="decision-grid">
+    <div><dt>当前策略答案</dt><dd class="choice">区域 2</dd></div>
+    <div><dt>禁止答案</dt><dd class="forbidden">区域 3</dd></div>
+    <div><dt>允许答案</dt><dd>区域 2</dd></div>
+    <div><dt>策略理由</dt><dd>normal_next_area:progress=0.130:alt=0.130:win=0.000:protect=0.000:v=0.130</dd></div>
+    <div><dt>目标牌</dt><dd>8万、7索、7饼</dd></div><div><dt>目标权重</dt><dd>1300 / 10000</dd></div>
+  </dl>
+  <section class="review-note">
+    <div><b>反对依据</b><p>区域3的整门索子不能全部按一等有效牌计算；8万、7索、7饼才是直接前进牌。</p></div>
+    <div><b>通用规则</b><p>一阶进张满权重，孤张、对子或靠张改良只给较低二阶权重。</p></div>
+  </section>
+</article>
+
+
+<article class="case pass" data-status="pass">
+  <div class="case-head">
+    <div>
+      <p class="eyebrow">#19 · random-6-turn-3-area</p>
+      <h2>八张索子仍不虚报整门8200权重</h2>
+      <p class="source">random replay sample 6 turn 3</p>
+    </div>
+    <span class="status pass">通过</span>
+  </div>
+  <div class="state-strip">
+    <span>决策类型 <b>发射区域</b></span>
+    <span>剩余球数 <b>6</b></span>
+    <span>立直状态 <b>未立直</b></span>
+  </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-7 art" title="8万"></span><b>8万</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-26 art" title="9饼"></span><b>9饼</b></div></section>
+  <section class="hand-state">
+    <div class="hand-block">
+      <span>当前手牌 13张</span>
+      <div class="tiles"><span class="tile tile-id-2 art" title="3万"></span><span class="tile tile-id-2 art" title="3万"></span><span class="tile tile-id-6 art" title="7万"></span><span class="tile tile-id-8 art" title="9万"></span><span class="tile tile-id-9 art" title="1索"></span><span class="tile tile-id-9 art" title="1索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-13 art" title="5索"></span><span class="tile tile-id-14 art" title="6索"></span><span class="tile tile-id-16 art" title="8索"></span><span class="tile tile-id-17 art" title="9索"></span><span class="tile tile-id-23 art" title="6饼"></span></div>
+    </div>
+
+  </section>
+  <dl class="decision-grid">
+    <div><dt>当前策略答案</dt><dd class="choice">区域 2</dd></div>
+    <div><dt>禁止答案</dt><dd class="forbidden">区域 3</dd></div>
+    <div><dt>允许答案</dt><dd>区域 2</dd></div>
+    <div><dt>策略理由</dt><dd>normal_next_area:progress=0.210:alt=0.180:win=0.000:protect=0.000:v=0.210</dd></div>
+    <div><dt>目标牌</dt><dd>3万、8万、1索、7索</dd></div><div><dt>目标权重</dt><dd>2100 / 10000</dd></div>
+  </dl>
+  <section class="review-note">
+    <div><b>反对依据</b><p>79万仍是完整搭子，不能仅因索子达到八张就把整门索子都当作直接进张。</p></div>
+    <div><b>通用规则</b><p>近向听且外部仍有强搭子时不强制转混一色，继续按直接进张概率选择区域。</p></div>
+  </section>
+</article>
+
+
+<article class="case pass" data-status="pass">
+  <div class="case-head">
+    <div>
+      <p class="eyebrow">#20 · random-6-turn-3-discard</p>
+      <h2>索子推进后先切孤立6饼</h2>
+      <p class="source">random replay sample 6 turn 3</p>
+    </div>
+    <span class="status pass">通过</span>
+  </div>
+  <div class="state-strip">
+    <span>决策类型 <b>弃牌/立直</b></span>
+    <span>剩余球数 <b>5</b></span>
+    <span>立直状态 <b>未立直</b></span>
+  </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-7 art" title="8万"></span><b>8万</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-26 art" title="9饼"></span><b>9饼</b></div></section>
+  <section class="hand-state">
+    <div class="hand-block">
+      <span>摸前手牌 13张</span>
+      <div class="tiles"><span class="tile tile-id-2 art" title="3万"></span><span class="tile tile-id-2 art" title="3万"></span><span class="tile tile-id-6 art" title="7万"></span><span class="tile tile-id-8 art" title="9万"></span><span class="tile tile-id-9 art" title="1索"></span><span class="tile tile-id-9 art" title="1索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-13 art" title="5索"></span><span class="tile tile-id-14 art" title="6索"></span><span class="tile tile-id-16 art" title="8索"></span><span class="tile tile-id-17 art" title="9索"></span><span class="tile tile-id-23 art" title="6饼"></span></div>
+    </div>
+
+        <div class="draw-block">
+          <span>摸到第14张</span>
+          <span class="tile tile-id-11 drawn art" title="3索"></span>
+        </div>
+  </section>
+  <dl class="decision-grid">
+    <div><dt>当前策略答案</dt><dd class="choice">6饼(id=23)</dd></div>
+    <div><dt>禁止答案</dt><dd class="forbidden">7万(id=6)、9万(id=8)</dd></div>
+    <div><dt>允许答案</dt><dd>6饼(id=23)</dd></div>
+    <div><dt>策略理由</dt><dd>route_ev_discard:normal_side_sou_next_area:area=3:p=0.420:alt=0.288:protect=0.000</dd></div>
+    <div><dt>舍后向听</dt><dd>2</dd></div><div><dt>舍后受入</dt><dd>无</dd></div><div><dt>本球立直</dt><dd>否</dd></div>
+  </dl>
+  <section class="review-note">
+    <div><b>反对依据</b><p>摸3索后不应拆79万搭子，孤立6饼是更朴素且保留后续形状的选择。</p></div>
+    <div><b>通用规则</b><p>普通效率与软同花色路线都先保护完成面子、对子和有效搭子，再比较孤张。</p></div>
+  </section>
+</article>
+
+
+<article class="case pass" data-status="pass">
+  <div class="case-head">
+    <div>
+      <p class="eyebrow">#21 · random-7-turn-1-area</p>
+      <h2>远向听时允许向最多花色柔性靠拢</h2>
+      <p class="source">random replay sample 7 turn 1</p>
+    </div>
+    <span class="status pass">通过</span>
+  </div>
+  <div class="state-strip">
+    <span>决策类型 <b>发射区域</b></span>
+    <span>剩余球数 <b>8</b></span>
+    <span>立直状态 <b>未立直</b></span>
+  </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-13 art" title="5索"></span><b>5索</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-0 art" title="1万"></span><b>1万</b></div></section>
+  <section class="hand-state">
+    <div class="hand-block">
+      <span>当前手牌 13张</span>
+      <div class="tiles"><span class="tile tile-id-0 art" title="1万"></span><span class="tile tile-id-3 art" title="4万"></span><span class="tile tile-id-4 art" title="5万"></span><span class="tile tile-id-4 art" title="5万"></span><span class="tile tile-id-6 art" title="7万"></span><span class="tile tile-id-8 art" title="9万"></span><span class="tile tile-id-11 art" title="3索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-15 art" title="7索"></span><span class="tile tile-id-17 art" title="9索"></span><span class="tile tile-id-23 art" title="6饼"></span><span class="tile tile-id-30 art" title="北"></span></div>
+    </div>
+
+  </section>
+  <dl class="decision-grid">
+    <div><dt>当前策略答案</dt><dd class="choice">区域 2</dd></div>
+    <div><dt>禁止答案</dt><dd class="forbidden">无</dd></div>
+    <div><dt>允许答案</dt><dd>区域 1、区域 2</dd></div>
+    <div><dt>策略理由</dt><dd>normal_next_area:progress=0.850:alt=0.800:win=0.000:protect=0.000:v=0.850</dd></div>
+    <div><dt>目标牌</dt><dd>1万、2万、3万、4万、5万、6万、7万、8万、9万、1索、2索、3索、4索、5索、6索、7索、8索、9索、4饼、5饼、6饼、7饼、8饼、北</dd></div><div><dt>目标权重</dt><dd>8500 / 10000</dd></div>
+  </dl>
+  <section class="review-note">
+    <div><b>反对依据</b><p>万字数量领先时，可以在不牺牲牌效率的前提下向万字区域靠拢。</p></div>
+    <div><b>通用规则</b><p>远向听只做柔性花色偏置；若区域2的一阶效率相当，也保留为合法选择。</p></div>
+  </section>
+</article>
+
+
+<article class="case pass" data-status="pass">
+  <div class="case-head">
+    <div>
+      <p class="eyebrow">#22 · random-10-turn-2-area</p>
+      <h2>四暗刻路线只把重复牌列为直接目标</h2>
+      <p class="source">random replay sample 10 turn 2</p>
+    </div>
+    <span class="status pass">通过</span>
+  </div>
+  <div class="state-strip">
+    <span>决策类型 <b>发射区域</b></span>
+    <span>剩余球数 <b>7</b></span>
+    <span>立直状态 <b>未立直</b></span>
+  </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-23 art" title="6饼"></span><b>6饼</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-15 art" title="7索"></span><b>7索</b></div></section>
+  <section class="hand-state">
+    <div class="hand-block">
+      <span>当前手牌 13张</span>
+      <div class="tiles"><span class="tile tile-id-1 art" title="2万"></span><span class="tile tile-id-2 art" title="3万"></span><span class="tile tile-id-7 art" title="8万"></span><span class="tile tile-id-10 art" title="2索"></span><span class="tile tile-id-10 art" title="2索"></span><span class="tile tile-id-11 art" title="3索"></span><span class="tile tile-id-11 art" title="3索"></span><span class="tile tile-id-14 art" title="6索"></span><span class="tile tile-id-14 art" title="6索"></span><span class="tile tile-id-14 art" title="6索"></span><span class="tile tile-id-21 art" title="4饼"></span><span class="tile tile-id-23 art" title="6饼"></span><span class="tile tile-id-25 art" title="8饼"></span></div>
+    </div>
+
+  </section>
+  <dl class="decision-grid">
+    <div><dt>当前策略答案</dt><dd class="choice">区域 7</dd></div>
+    <div><dt>禁止答案</dt><dd class="forbidden">无</dd></div>
+    <div><dt>允许答案</dt><dd>区域 7</dd></div>
+    <div><dt>策略理由</dt><dd>yakuman_route:suuankou:progress=0.320:alt=0.309:win=0.000:protect=0.000:v=0.320</dd></div>
+    <div><dt>目标牌</dt><dd>2万、3万、8万、2索、3索、4饼、6饼、8饼</dd></div><div><dt>目标权重</dt><dd>3200 / 10000</dd></div>
+  </dl>
+  <section class="review-note">
+    <div><b>反对依据</b><p>1万和4万能改善23万顺子，但不会直接减少四暗刻所需的对子或刻子数量。</p></div>
+    <div><b>通用规则</b><p>役满路线的主目标只计算直接减少役满缺牌数的牌；普通顺子改良作为后路，不与主目标等权。</p></div>
+  </section>
+</article>
+
+
+<article class="case pass" data-status="pass">
+  <div class="case-head">
+    <div>
+      <p class="eyebrow">#23 · random-11-turn-3-discard</p>
+      <h2>四暗刻概率接近时保留索子与七对后路</h2>
+      <p class="source">random replay sample 11 turn 3</p>
+    </div>
+    <span class="status pass">通过</span>
+  </div>
+  <div class="state-strip">
+    <span>决策类型 <b>弃牌/立直</b></span>
+    <span>剩余球数 <b>5</b></span>
+    <span>立直状态 <b>未立直</b></span>
+  </div>
+  <section class="dora-strip" aria-label="宝牌与里宝牌"><div class="dora-item"><span>宝牌</span><span class="tile tile-id-33 art" title="中"></span><b>中</b></div><div class="dora-item"><span>里宝牌</span><span class="tile tile-id-1 art" title="2万"></span><b>2万</b></div></section>
+  <section class="hand-state">
+    <div class="hand-block">
+      <span>摸前手牌 13张</span>
+      <div class="tiles"><span class="tile tile-id-3 art" title="4万"></span><span class="tile tile-id-5 art" title="6万"></span><span class="tile tile-id-7 art" title="8万"></span><span class="tile tile-id-9 art" title="1索"></span><span class="tile tile-id-9 art" title="1索"></span><span class="tile tile-id-11 art" title="3索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-12 art" title="4索"></span><span class="tile tile-id-14 art" title="6索"></span><span class="tile tile-id-15 art" title="7索"></span><span class="tile tile-id-16 art" title="8索"></span><span class="tile tile-id-16 art" title="8索"></span><span class="tile tile-id-27 art" title="东"></span></div>
+    </div>
+
+        <div class="draw-block">
+          <span>摸到第14张</span>
+          <span class="tile tile-id-11 drawn art" title="3索"></span>
+        </div>
+  </section>
+  <dl class="decision-grid">
+    <div><dt>当前策略答案</dt><dd class="choice">4万(id=3)</dd></div>
+    <div><dt>禁止答案</dt><dd class="forbidden">7索(id=15)</dd></div>
+    <div><dt>允许答案</dt><dd>4万(id=3)</dd></div>
+    <div><dt>策略理由</dt><dd>route_ev_discard:suuankou:next_area=2:p=0.530:alt=0.470:protect=0.000:side_sou</dd></div>
+    <div><dt>舍后向听</dt><dd>2</dd></div><div><dt>舍后受入</dt><dd>无</dd></div><div><dt>本球立直</dt><dd>否</dd></div>
+  </dl>
+  <section class="review-note">
+    <div><b>反对依据</b><p>切7索会破坏索子清一色、混一色和七对后路；切4万的四暗刻成功率只略低。</p></div>
+    <div><b>通用规则</b><p>役满候选成功率在最佳值九成以内时，优先切弱异色孤张并保留强同花色后路。</p></div>
   </section>
 </article>
 </section>
