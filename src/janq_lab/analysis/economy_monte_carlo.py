@@ -389,6 +389,7 @@ def simulate_session(
     yakuman_scores: list[JanqScore] = []
     paren_wins = 0
     enter_yakuman = normal.score.is_yakuman
+    initial_yakuman_units = max(1, normal.score.yakuman_count) if normal.score.is_yakuman else 0
     previous_score = normal.score
 
     if not enter_yakuman:
@@ -418,13 +419,15 @@ def simulate_session(
             payout += win_payout
             previous_score = paren.score
             if paren.score.is_yakuman or agari_count >= 8:
+                if paren.score.is_yakuman:
+                    initial_yakuman_units += max(1, paren.score.yakuman_count)
                 enter_yakuman = True
                 break
 
     yakuman_wins = 0
     yakuman_units = 0
     if enter_yakuman:
-        cumulative_yakuman_units = 0
+        cumulative_yakuman_units = initial_yakuman_units
         for _ in range(max_bonus_hands):
             record = choose_enabled_record(special_records.yakuman_records, rng)
             yakuman = _simulate_scored_hand(

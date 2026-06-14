@@ -79,6 +79,10 @@ Yakuman challenge:
 payout = BET * yakuman_multiplier(10x) * cumulative_yakuman_win_count
 ```
 
+The triggering yakuman already counts toward `cumulative_yakuman_win_count`.
+For example, with BET=10, a normal-game single yakuman pays 100G, then the
+first successful yakuman challenge hand pays 200G.
+
 The official help notes that the yakuman win count accumulates until ryukyoku,
 and overlapping yakuman add their overlapping units to that count.
 

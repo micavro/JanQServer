@@ -370,6 +370,7 @@ def _attach_bonus_hands(
     bonus_hands: list[ReplayHand] = []
     cumulative_payout = normal.payout
     enter_yakuman = normal.score.is_yakuman
+    initial_yakuman_units = max(1, normal.score.yakuman_count) if normal.score.is_yakuman else 0
     previous_score = normal.score
 
     if not enter_yakuman:
@@ -416,11 +417,13 @@ def _attach_bonus_hands(
             agari_count += 1
             previous_score = replay.score
             if replay.score.is_yakuman or agari_count >= 8:
+                if replay.score.is_yakuman:
+                    initial_yakuman_units += max(1, replay.score.yakuman_count)
                 enter_yakuman = True
                 break
 
     if enter_yakuman:
-        cumulative_yakuman_units = 0
+        cumulative_yakuman_units = initial_yakuman_units
         records = special.yakuman_records
         for bonus_index in range(1, max_bonus_hands + 1):
             record = choose_enabled_record(records, rng)

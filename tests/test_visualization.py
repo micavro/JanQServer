@@ -106,9 +106,9 @@ class HtmlReplayTests(unittest.TestCase):
 
         self.assertTrue(replay.score.is_yakuman)
         self.assertEqual(("yakuman",) * 5, tuple(hand.mode for hand in replay.bonus_hands))
-        self.assertEqual([100, 200, 300, 400], [hand.payout for hand in wins])
-        self.assertEqual([1, 2, 3, 4], [hand.cumulative_yakuman_units for hand in wins])
-        self.assertEqual(1100, replay.total_payout)
+        self.assertEqual([200, 300, 400, 500], [hand.payout for hand in wins])
+        self.assertEqual([2, 3, 4, 5], [hand.cumulative_yakuman_units for hand in wins])
+        self.assertEqual(1500, replay.total_payout)
 
     def test_render_single_replay_keeps_backwards_compatible_api(self):
         replay = simulate_replay(seed=3, strategy="route_ev", max_turns=2)
