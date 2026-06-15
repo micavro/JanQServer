@@ -32,6 +32,25 @@ Area targets are not all equal:
 - A far-away hand may lean toward its dominant suit, but off-suit first-order
   improvements remain in the comparison.
 
+## Known dora and ura-dora
+
+The game state exposes both dora tiles before the hand is played, so the normal
+route treats dora and ura-dora as two known value tiles when choosing shape.
+This is deliberately a restrained efficiency adjustment:
+
+- Shanten, completed melds, triplets, and the active route are still decided
+  first.
+- Only area or discard candidates within two percentage points of the best raw
+  efficiency can be changed by dora value.
+- Discarding a direct dora costs up to two percentage points. A tile one step
+  from dora costs about 0.8 points, and a tile two steps away costs about 0.3
+  points.
+- Dora and ura-dora stack, with a cap so the strategy does not destroy a much
+  better shape merely to keep value.
+- Yakuman routes ignore this adjustment because dora does not add value to a
+  natural yakuman. Honitsu and other established high-value routes continue to
+  prioritize their route structure.
+
 ## Route gates
 
 The prototype considers:

@@ -53,6 +53,9 @@ SUUANKOU_ROUTE_VALUE = 330.0
 CHUUREN_ROUTE_VALUE = 300.0
 KOKUSHI_ROUTE_VALUE = 60.0
 SEARCH_DEPTH = 1
+DORA_EFFICIENCY_MARGIN = 0.02
+DORA_DISCARD_BONUS_CAP = 0.025
+DORA_AREA_BONUS_CAP = 0.02
 
 
 @dataclass(frozen=True)
@@ -87,6 +90,7 @@ class NextAreaEstimate:
     protection_probability: float
     score: float
     target_factors: tuple[float, ...] = ()
+    dora_bonus: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -95,6 +99,21 @@ class NormalProgressPlan:
     targets: tuple[int, ...]
     suit: frozenset[int] | None = None
     target_factors: tuple[float, ...] = ()
+
+
+@dataclass(frozen=True)
+class NormalDiscardCandidate:
+    shape_guard: float
+    shanten_score: int
+    raw_accept_score: float
+    adjusted_accept_score: float
+    dora_discard_cost: float
+    dora_area_bonus: float
+    accept_progress_probability: float
+    accept_count: int
+    next_area: NextAreaEstimate
+    keep_score: float
+    discard: int
 
 
 def choose_route_ev_area(
@@ -173,6 +192,7 @@ def choose_route_ev_area(
                     plan.targets,
                     table.areas,
                     target_factors=plan.target_factors,
+                    dora_ids=_known_dora_ids(dora_id, ura_dora_id),
                 ),
                 plan.reason,
             )
@@ -309,7 +329,12 @@ def choose_route_ev_discard(
         )
 
     if route is None:
-        discard, next_area = _normal_lookahead_discard(state, balls, areas)
+        discard, next_area = _normal_lookahead_discard(
+            state,
+            balls,
+            areas,
+            dora_ids=_known_dora_ids(dora_id, ura_dora_id),
+        )
         after = state.with_removed_one(discard)
         plan_after = _normal_progress_plan(after, balls, areas)
         return DiscardDecision(
@@ -322,6 +347,7 @@ def choose_route_ev_discard(
                 f":area={next_area.area}:p={next_area.progress_probability:.3f}"
                 f":alt={next_area.alternate_progress_probability:.3f}"
                 f":protect={next_area.protection_probability:.3f}"
+                f":dora={next_area.dora_bonus:.3f}"
             ),
         )
     if route.name.startswith("honitsu_"):
@@ -408,6 +434,7 @@ def _area_decision_from_estimate(
             f":alt={estimate.alternate_progress_probability:.3f}"
             f":win={win_probability:.3f}"
             f":protect={estimate.protection_probability:.3f}"
+            f":dora={estimate.dora_bonus:.3f}"
             f":v={estimate.score:.3f}"
         ),
         target_factors=estimate.target_factors,
@@ -421,6 +448,7 @@ def _next_area_estimate(
     *,
     winners: tuple[int, ...] = (),
     target_factors: tuple[float, ...] = (),
+    dora_ids: tuple[int, ...] = (),
 ) -> NextAreaEstimate:
     protected = tuple(tile_id for tile_id, count in enumerate(counts) if count == 3)
     factors = _normalized_target_factors(targets, target_factors)
@@ -436,8 +464,32 @@ def _next_area_estimate(
         win_p = _conditioned_area_probability(counts, winners, area, areas)
         protect_p = _conditioned_area_probability(counts, protected, area, areas)
         score = progress_p + win_p * 0.35 + protect_p * 0.25
-        scored.append((score, progress_p, protect_p, -area, area))
-    score, progress_p, protect_p, _, area = max(scored)
+        dora_bonus = _area_dora_bonus(
+            counts,
+            targets,
+            factors,
+            area,
+            areas,
+            dora_ids,
+        )
+        scored.append((score, dora_bonus, progress_p, protect_p, -area, area))
+    best_score = max(row[0] for row in scored)
+    near_best = [
+        row
+        for row in scored
+        if row[0] >= best_score - DORA_EFFICIENCY_MARGIN
+    ]
+    raw_score, dora_bonus, progress_p, protect_p, _, area = max(
+        near_best,
+        key=lambda row: (
+            row[0] + row[1],
+            row[1],
+            row[0],
+            row[2],
+            row[3],
+            row[4],
+        ),
+    )
     alternate_progress_p = max(
         (
             _conditioned_area_probability(
@@ -458,8 +510,9 @@ def _next_area_estimate(
         progress_probability=progress_p,
         alternate_progress_probability=alternate_progress_p,
         protection_probability=protect_p,
-        score=score,
+        score=raw_score + dora_bonus,
         target_factors=factors,
+        dora_bonus=dora_bonus,
     )
 
 
@@ -1150,6 +1203,8 @@ def _normal_lookahead_discard(
     hand: TileSet,
     balls: int,
     areas: tuple[tuple[int, ...], ...],
+    *,
+    dora_ids: tuple[int, ...] = (),
 ) -> tuple[int, NextAreaEstimate]:
     shanten_candidates = []
     for tile_id in discard_options(hand):
@@ -1174,9 +1229,19 @@ def _normal_lookahead_discard(
             targets,
             areas,
             target_factors=plan.target_factors,
+            dora_ids=dora_ids,
         )
         accepts = improving_tiles(after)
-        accept_area = _next_area_estimate(after.counts, accepts, areas) if accepts else next_area
+        accept_area = (
+            _next_area_estimate(
+                after.counts,
+                accepts,
+                areas,
+                dora_ids=dora_ids,
+            )
+            if accepts
+            else next_area
+        )
         preferred_suit = plan.suit or (side_plan.suit if side_plan is not None else None)
         shape_guard = _normal_discard_shape_guard(
             hand,
@@ -1191,25 +1256,59 @@ def _normal_lookahead_discard(
             areas,
             preferred_suit,
         )
+        dora_discard_cost = _dora_discard_cost(tile_id, dora_ids)
+        raw_accept_score = accept_area.score - accept_area.dora_bonus
         candidates.append(
-            (
-                shape_guard,
-                -after_shanten,
-                accept_area.score,
-                accept_area.progress_probability,
-                len(accepts),
-                next_area.score,
-                next_area.progress_probability,
-                next_area.alternate_progress_probability,
-                next_area.protection_probability,
-                -keep_score,
-                -tile_id,
-                tile_id,
-                next_area,
+            NormalDiscardCandidate(
+                shape_guard=shape_guard,
+                shanten_score=-after_shanten,
+                raw_accept_score=raw_accept_score,
+                adjusted_accept_score=(
+                    raw_accept_score + accept_area.dora_bonus - dora_discard_cost
+                ),
+                dora_discard_cost=dora_discard_cost,
+                dora_area_bonus=accept_area.dora_bonus,
+                accept_progress_probability=accept_area.progress_probability,
+                accept_count=len(accepts),
+                next_area=next_area,
+                keep_score=keep_score,
+                discard=tile_id,
             )
         )
-    *_, discard, next_area = max(candidates)
-    return discard, next_area
+    best_shape_guard = max(candidate.shape_guard for candidate in candidates)
+    shape_best = [
+        candidate for candidate in candidates
+        if candidate.shape_guard == best_shape_guard
+    ]
+    best_shanten_score = max(candidate.shanten_score for candidate in shape_best)
+    shanten_best = [
+        candidate for candidate in shape_best
+        if candidate.shanten_score == best_shanten_score
+    ]
+    best_accept_score = max(candidate.raw_accept_score for candidate in shanten_best)
+    near_best = [
+        candidate
+        for candidate in shanten_best
+        if candidate.raw_accept_score >= best_accept_score - DORA_EFFICIENCY_MARGIN
+    ]
+    best = max(
+        near_best,
+        key=lambda candidate: (
+            candidate.adjusted_accept_score,
+            -candidate.dora_discard_cost,
+            candidate.raw_accept_score,
+            candidate.dora_area_bonus,
+            candidate.accept_progress_probability,
+            candidate.accept_count,
+            candidate.next_area.score,
+            candidate.next_area.progress_probability,
+            candidate.next_area.alternate_progress_probability,
+            candidate.next_area.protection_probability,
+            -candidate.keep_score,
+            -candidate.discard,
+        ),
+    )
+    return best.discard, best.next_area
 
 
 def _route_estimate_by_name(
@@ -1936,6 +2035,75 @@ def _normal_discard_keep_score(
         if count >= 2:
             score += 3.0
     return score
+
+
+def _known_dora_ids(
+    dora_id: int | None,
+    ura_dora_id: int | None,
+) -> tuple[int, ...]:
+    return tuple(
+        tile_id
+        for tile_id in (dora_id, ura_dora_id)
+        if tile_id is not None and 0 <= tile_id < TILE_COUNT
+    )
+
+
+def _dora_tile_affinity(tile_id: int, dora_ids: tuple[int, ...]) -> float:
+    affinity = 0.0
+    for dora_id in dora_ids:
+        if tile_id == dora_id:
+            affinity += 1.0
+            continue
+        if tile_id >= 27 or dora_id >= 27 or tile_id // 9 != dora_id // 9:
+            continue
+        distance = abs((tile_id % 9) - (dora_id % 9))
+        if distance == 1:
+            affinity += 0.5
+        elif distance == 2:
+            affinity += 0.2
+    return affinity
+
+
+def _dora_discard_cost(tile_id: int, dora_ids: tuple[int, ...]) -> float:
+    cost = 0.0
+    for dora_id in dora_ids:
+        if tile_id == dora_id:
+            cost += 0.02
+            continue
+        if tile_id >= 27 or dora_id >= 27 or tile_id // 9 != dora_id // 9:
+            continue
+        distance = abs((tile_id % 9) - (dora_id % 9))
+        if distance == 1:
+            cost += 0.008
+        elif distance == 2:
+            cost += 0.003
+    return min(DORA_DISCARD_BONUS_CAP, cost)
+
+
+def _area_dora_bonus(
+    counts: tuple[int, ...],
+    targets: tuple[int, ...],
+    target_factors: tuple[float, ...],
+    area: int,
+    areas: tuple[tuple[int, ...], ...],
+    dora_ids: tuple[int, ...],
+) -> float:
+    if not targets or not dora_ids:
+        return 0.0
+    dora_factors = tuple(
+        factor * _dora_tile_affinity(tile_id, dora_ids) * 0.10
+        for tile_id, factor in zip(targets, target_factors)
+    )
+    return min(
+        DORA_AREA_BONUS_CAP,
+        _conditioned_area_probability(
+            counts,
+            targets,
+            area,
+            areas,
+            target_factors=dora_factors,
+        ),
+    )
 
 
 def _future_area_support(

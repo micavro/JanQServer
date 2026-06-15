@@ -630,10 +630,57 @@ class RouteEvStrategyTests(unittest.TestCase):
             (3, 5, 10, 10, 11, 12, 12, 14, 14, 21, 28, 28, 28, 28),
             balls=1,
             drawn_tile=28,
+            dora_id=28,
+            ura_dora_id=28,
         )
 
         self.assertEqual(28, decision.discard_tile)
         self.assertIn("honor_fourth_tsumogiri", decision.reason)
+
+    def test_known_dora_and_ura_retain_a_direct_value_tile_in_a_close_choice(self):
+        hand = (4, 6, 6, 8, 10, 11, 13, 14, 15, 17, 21, 22, 22, 24)
+
+        baseline = choose_route_ev_discard(hand, balls=5)
+        with_dora = choose_route_ev_discard(hand, balls=5, dora_id=17)
+        with_ura = choose_route_ev_discard(hand, balls=5, ura_dora_id=17)
+
+        self.assertEqual(17, baseline.discard_tile)
+        self.assertEqual(21, with_dora.discard_tile)
+        self.assertEqual(with_dora.discard_tile, with_ura.discard_tile)
+        self.assertIn("dora=", with_dora.reason)
+
+    def test_dora_adjacent_singleton_breaks_a_close_efficiency_tie(self):
+        hand = (0, 0, 3, 4, 7, 10, 11, 13, 14, 18, 21, 22, 22, 27)
+
+        baseline = choose_route_ev_discard(hand, balls=5)
+        with_adjacent_dora = choose_route_ev_discard(hand, balls=5, dora_id=19)
+
+        self.assertEqual(18, baseline.discard_tile)
+        self.assertEqual(7, with_adjacent_dora.discard_tile)
+        self.assertNotEqual(18, with_adjacent_dora.discard_tile)
+
+    def test_area_uses_dora_only_as_a_near_tie_value_bonus(self):
+        table = load_tables()["nyukyu_base_table.bytes"]
+        hand = (0, 3, 12, 13, 14, 16, 18, 19, 21, 26, 28, 29, 29)
+
+        baseline = choose_route_ev_area(hand, table, balls=5)
+        with_dora = choose_route_ev_area(hand, table, balls=5, dora_id=18)
+
+        self.assertEqual(5, baseline.area)
+        self.assertEqual(6, with_dora.area)
+        self.assertIn("dora=0.020", with_dora.reason)
+
+    def test_yakuman_route_does_not_preserve_dora_over_route_shape(self):
+        decision = choose_route_ev_discard(
+            (3, 5, 7, 9, 9, 11, 11, 12, 12, 14, 15, 16, 16, 27),
+            balls=5,
+            drawn_tile=11,
+            dora_id=3,
+            ura_dora_id=3,
+        )
+
+        self.assertEqual(3, decision.discard_tile)
+        self.assertIn("suuankou", decision.reason)
 
     def test_random_review_question_uses_normal_improvement_efficiency(self):
         decision = choose_route_ev_discard(
