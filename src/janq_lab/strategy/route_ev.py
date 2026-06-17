@@ -691,6 +691,10 @@ def _active_route(
     areas: tuple[tuple[int, ...], ...],
 ) -> RouteEstimate | None:
     estimates = _route_estimates(counts, balls, areas)
+    locked_honitsu = _strong_honitsu_lock(counts, balls, areas, estimates)
+    if locked_honitsu is not None:
+        return locked_honitsu
+
     yakuman_routes = [
         route for route in estimates
         if not route.name.startswith("honitsu_")
@@ -750,7 +754,14 @@ def _active_route(
         suit = _route_suit(route.name)
         allowed = suit | _honitsu_effective_honors(counts, suit, areas)
         allowed_count = sum(counts[tile_id] for tile_id in allowed)
+        suit_count = sum(counts[tile_id] for tile_id in suit)
+        honor_pairs = sum(
+            1 for tile_id in _honitsu_effective_honors(counts, suit, areas)
+            if counts[tile_id] >= 2
+        )
         off_count = sum(counts) - allowed_count
+        if _honitsu_is_committed(counts, suit, balls, areas):
+            return route
         if allowed_count >= 10 and off_count <= 3:
             return route
         if (
@@ -761,6 +772,14 @@ def _active_route(
         ):
             return route
         if allowed_count >= 9 and balls >= 5 and off_count <= 4 and shanten(TileSet(counts)) <= 3:
+            return route
+        if (
+            suit_count >= 4
+            and honor_pairs >= 1
+            and allowed_count >= 7
+            and balls >= 7
+            and off_count <= 6
+        ):
             return route
     return None
 
@@ -875,10 +894,14 @@ def _outside_meld_pair_missing(counts: tuple[int, ...]) -> int:
             start = min(suit)
             for rank in range(7):
                 sequence = (start + rank, start + rank + 1, start + rank + 2)
-                cost = 0
-                for tile_id in sequence:
-                    needed = 1 + (2 if tile_id == pair_tile else 0)
-                    cost += max(0, needed - counts[tile_id])
+                if pair_tile in sequence:
+                    cost = sum(
+                        max(0, (3 if tile_id == pair_tile else 1) - counts[tile_id])
+                        for tile_id in sequence
+                    )
+                else:
+                    cost = max(0, 2 - counts[pair_tile])
+                    cost += sum(max(0, 1 - counts[tile_id]) for tile_id in sequence)
                 best = min(best, cost)
     return best
 
@@ -948,6 +971,38 @@ def _honitsu_estimate(
     targets = tuple(tile_id for tile_id in allowed if counts[tile_id] < 4)
     probability = _route_probability(counts, targets, missing, balls, areas)
     return RouteEstimate(f"honitsu_{_suit_name(suit)}", reward, missing, targets, probability)
+
+
+def _strong_honitsu_lock(
+    counts: tuple[int, ...],
+    balls: int,
+    areas: tuple[tuple[int, ...], ...],
+    estimates: tuple[RouteEstimate, ...],
+) -> RouteEstimate | None:
+    yakuman_routes = [
+        route for route in estimates
+        if not route.name.startswith("honitsu_")
+    ]
+    if any(route.missing <= 4 and route.probability >= 0.02 for route in yakuman_routes):
+        return None
+    honitsu_routes = [
+        route for route in estimates
+        if route.name.startswith("honitsu_")
+    ]
+    if not honitsu_routes:
+        return None
+    honitsu_routes.sort(key=lambda route: route.value, reverse=True)
+    for route in honitsu_routes:
+        suit = _route_suit(route.name)
+        suit_count = sum(counts[tile_id] for tile_id in suit)
+        relevant_honors = _honitsu_effective_honors(counts, suit, areas)
+        allowed_count = sum(counts[tile_id] for tile_id in suit | relevant_honors)
+        off_count = sum(counts) - allowed_count
+        if suit_count >= 10 and off_count <= 2 and balls >= 3:
+            return route
+        if allowed_count >= 12 and off_count <= 2 and balls >= 3:
+            return route
+    return None
 
 
 def _normal_efficiency_value(
@@ -1101,12 +1156,23 @@ def _yakuman_lookahead_discard(
         if candidate[2] >= best_probability * 0.90
     ]
 
-    side_suit = _side_route_suit(hand.counts, route)
+    side_suit = None if route.name == "daisangen" else _side_route_suit(hand.counts, route)
     candidates = []
     for _, _, _, tile_id, _, _, next_area in finalists:
+        guard = _yakuman_fallback_discard_guard(hand, tile_id, side_suit)
+        if tile_id in route.targets:
+            guard -= 3
+            if (
+                side_suit is not None
+                and tile_id < 27
+                and tile_id not in side_suit
+                and tile_id % 9 in (0, 8)
+                and _tile_suit_count(hand.counts, tile_id) >= 3
+            ):
+                guard -= 4
         candidates.append(
             (
-                _yakuman_fallback_discard_guard(hand, tile_id, side_suit),
+                guard,
                 next_area.score,
                 next_area.progress_probability,
                 next_area.alternate_progress_probability,
@@ -1142,6 +1208,12 @@ def _honitsu_lookahead_discard(
     areas: tuple[tuple[int, ...], ...],
 ) -> tuple[int, NextAreaEstimate]:
     route_candidates = []
+    committed = _honitsu_is_committed(
+        hand.counts,
+        _route_suit(route.name),
+        balls,
+        areas,
+    ) or _honitsu_route_locked_for_discard(hand.counts, route, balls, areas)
     for tile_id in discard_options(hand):
         after = hand.with_removed_one(tile_id)
         post_route = _route_estimate_by_name(after.counts, balls, areas, route.name)
@@ -1160,12 +1232,20 @@ def _honitsu_lookahead_discard(
     if not route_candidates:
         return _normal_lookahead_discard(hand, balls, areas)
 
-    best_shanten = max(candidate[0] for candidate in route_candidates)
-    shanten_best = [candidate for candidate in route_candidates if candidate[0] == best_shanten]
-    best_missing = max(candidate[1] for candidate in shanten_best)
-    shortest = [candidate for candidate in shanten_best if candidate[1] == best_missing]
-    best_guard = max(candidate[2] for candidate in shortest)
-    finalists = [candidate for candidate in shortest if candidate[2] == best_guard]
+    if committed:
+        best_guard = max(candidate[2] for candidate in route_candidates)
+        guard_best = [candidate for candidate in route_candidates if candidate[2] == best_guard]
+        best_missing = max(candidate[1] for candidate in guard_best)
+        shortest = [candidate for candidate in guard_best if candidate[1] == best_missing]
+        best_shanten = max(candidate[0] for candidate in shortest)
+        finalists = [candidate for candidate in shortest if candidate[0] == best_shanten]
+    else:
+        best_shanten = max(candidate[0] for candidate in route_candidates)
+        shanten_best = [candidate for candidate in route_candidates if candidate[0] == best_shanten]
+        best_missing = max(candidate[1] for candidate in shanten_best)
+        shortest = [candidate for candidate in shanten_best if candidate[1] == best_missing]
+        best_guard = max(candidate[2] for candidate in shortest)
+        finalists = [candidate for candidate in shortest if candidate[2] == best_guard]
 
     candidates = []
     for _, _, _, tile_id, after, post_route in finalists:
@@ -1523,6 +1603,48 @@ def _honitsu_effective_honors(
     return frozenset(honors)
 
 
+def _honitsu_is_committed(
+    counts: tuple[int, ...],
+    suit: frozenset[int],
+    balls: int,
+    areas: tuple[tuple[int, ...], ...],
+) -> bool:
+    relevant_honors = _honitsu_effective_honors(counts, suit, areas)
+    allowed = suit | relevant_honors
+    allowed_count = sum(counts[tile_id] for tile_id in allowed)
+    suit_count = sum(counts[tile_id] for tile_id in suit)
+    off_count = sum(counts) - allowed_count
+    honor_pairs = sum(1 for tile_id in relevant_honors if counts[tile_id] >= 2)
+    if allowed_count >= 10 and off_count <= 4 and balls >= 3:
+        return True
+    if suit_count >= 8 and allowed_count >= 9 and off_count <= 5 and balls >= 4:
+        return True
+    if suit_count >= 5 and allowed_count >= 8 and honor_pairs >= 1 and balls >= 5 and off_count <= 5:
+        return True
+    return (
+        suit_count >= 4
+        and allowed_count >= 7
+        and honor_pairs >= 1
+        and balls >= 7
+        and off_count <= 6
+    )
+
+
+def _honitsu_route_locked_for_discard(
+    counts: tuple[int, ...],
+    route: RouteEstimate,
+    balls: int,
+    areas: tuple[tuple[int, ...], ...],
+) -> bool:
+    if not route.name.startswith("honitsu_") or route.missing > balls:
+        return False
+    suit = _route_suit(route.name)
+    relevant_honors = _honitsu_effective_honors(counts, suit, areas)
+    allowed_count = sum(counts[tile_id] for tile_id in suit | relevant_honors)
+    suit_count = sum(counts[tile_id] for tile_id in suit)
+    return route.probability >= 0.5 and (allowed_count >= 9 or suit_count >= 7)
+
+
 def _honitsu_progress_targets(
     hand: TileSet,
     route_name: str,
@@ -1532,7 +1654,14 @@ def _honitsu_progress_targets(
     suit = _route_suit(route_name)
     relevant_honors = _honitsu_effective_honors(hand.counts, suit, areas)
     allowed = suit | relevant_honors
-    if balls >= 4 and _honitsu_should_build_suit_meld(hand, suit):
+    chiitoi_targets = _chiitoi_progress_targets(hand)
+    if chiitoi_targets and sum(1 for count in hand.counts if count >= 2) >= 4:
+        return tuple(sorted(set(chiitoi_targets) | (allowed & set(chiitoi_targets))))
+
+    if (
+        _honitsu_is_committed(hand.counts, suit, balls, areas)
+        or (balls >= 4 and _honitsu_should_build_suit_meld(hand, suit))
+    ):
         suit_targets = [
             tile_id
             for tile_id in sorted(suit)
@@ -1569,10 +1698,27 @@ def _honitsu_progress_target_factors(
     if not targets:
         return ()
     suit = _route_suit(route_name)
-    if balls >= 4 and _honitsu_should_build_suit_meld(hand, suit):
+    if (
+        _honitsu_is_committed(hand.counts, suit, balls, areas)
+        or (balls >= 4 and _honitsu_should_build_suit_meld(hand, suit))
+    ):
+        return (1.0,) * len(targets)
+    chiitoi_targets = set(_chiitoi_progress_targets(hand))
+    if chiitoi_targets and set(targets).issubset(chiitoi_targets):
         return (1.0,) * len(targets)
     direct = set(improving_tiles(hand))
     return tuple(1.0 if tile_id in direct else 0.15 for tile_id in targets)
+
+
+def _chiitoi_progress_targets(hand: TileSet) -> tuple[int, ...]:
+    pairish = sum(1 for count in hand.counts if count >= 2)
+    if pairish < 4:
+        return ()
+    return tuple(
+        tile_id
+        for tile_id, count in enumerate(hand.counts)
+        if count == 1
+    )
 
 
 def _honitsu_should_build_suit_meld(hand: TileSet, suit: frozenset[int]) -> bool:
@@ -1602,12 +1748,28 @@ def _honitsu_discard_shape_guard(
     balls: int,
 ) -> int:
     count = hand.counts[tile_id]
+    suit = _route_suit(route_name)
+    areas = _default_areas()
+    relevant_honors = _honitsu_effective_honors(hand.counts, suit, areas)
+    committed = _honitsu_is_committed(hand.counts, suit, balls, areas)
     if count >= 3:
-        return -100
-    if balls >= 4 and tile_id not in (_route_suit(route_name) | HONORS):
+        if tile_id in suit or tile_id in relevant_honors:
+            return -100
+        return 20
+    if tile_id not in (suit | relevant_honors):
+        if tile_id in HONORS:
+            if tile_id in DRAGONS and count == 1:
+                return 36 if committed else 12
+            return 18 if committed else 2
         if count >= 2:
-            return -8
-        return 0
+            return 16 if committed else -8
+        return 30 if committed else 4
+    if tile_id in suit:
+        return -35
+    if tile_id in relevant_honors:
+        return -42 if count >= 2 else -18
+    if tile_id in HONORS:
+        return 8
     return 0
 
 
@@ -1972,8 +2134,16 @@ def _normal_discard_shape_guard(
         and tile_id in preferred_suit
     ):
         guard -= 8.0
+    elif (
+        count == 1
+        and preferred_suit is not None
+        and tile_id < 27
+        and tile_id not in preferred_suit
+        and _is_weak_edge_taatsu_member(hand.counts, tile_id)
+    ):
+        guard += 8.0
 
-    if count == 1 and _is_complete_sequence_member(hand.counts, tile_id):
+    if count == 1 and _is_essential_sequence_member(hand.counts, tile_id):
         guard -= 80.0
 
     if preferred_suit is not None:
@@ -1985,14 +2155,32 @@ def _normal_discard_shape_guard(
     return guard
 
 
-def _is_complete_sequence_member(counts: tuple[int, ...], tile_id: int) -> bool:
+def _is_essential_sequence_member(counts: tuple[int, ...], tile_id: int) -> bool:
+    if tile_id >= 27:
+        return False
+    start = tile_id - (tile_id % 9)
+    suit = frozenset(range(start, start + 9))
+    before = _suit_sequence_count(counts, suit)
+    if before <= 0:
+        return False
+    after_counts = list(counts)
+    after_counts[tile_id] -= 1
+    return _suit_sequence_count(tuple(after_counts), suit) < before
+
+
+def _is_weak_edge_taatsu_member(counts: tuple[int, ...], tile_id: int) -> bool:
     if tile_id >= 27:
         return False
     start = tile_id - (tile_id % 9)
     rank = tile_id % 9
-    for seq_rank in range(max(0, rank - 2), min(rank, 6) + 1):
-        if all(counts[start + seq_rank + offset] > 0 for offset in range(3)):
-            return True
+    if rank == 0:
+        return counts[start + 1] > 0 and counts[start + 2] == 0
+    if rank == 1:
+        return counts[start] > 0 and counts[start + 2] == 0
+    if rank == 7:
+        return counts[start + 8] > 0 and counts[start + 6] == 0
+    if rank == 8:
+        return counts[start + 7] > 0 and counts[start + 6] == 0
     return False
 
 
@@ -2013,6 +2201,8 @@ def _normal_discard_keep_score(
         score += 5.0
 
     if preferred_suit is None:
+        if next_area in SIDE_AREA_HONORS and tile_id == SIDE_AREA_HONORS[next_area]:
+            score += 9.0 + count * 2.0
         if tile_id in DRAGONS and count == 1 and next_area != 4:
             score -= 9.0
         return score
@@ -2141,6 +2331,13 @@ def _suit_local_shape_bonus(counts: tuple[int, ...], tile_id: int) -> float:
     return min(4.0, nearby * 0.9)
 
 
+def _tile_suit_count(counts: tuple[int, ...], tile_id: int) -> int:
+    if tile_id >= 27:
+        return 0
+    start = tile_id - (tile_id % 9)
+    return sum(counts[start + rank] for rank in range(9))
+
+
 def _route_keep_score(hand: TileSet, tile_id: int, route: RouteEstimate) -> float:
     count = hand.counts[tile_id]
     score = _tile_keep_bias(hand, tile_id)
@@ -2151,7 +2348,7 @@ def _route_keep_score(hand: TileSet, tile_id: int, route: RouteEstimate) -> floa
             score += 30.0
         elif count == 1 and tile_id not in HONORS:
             score -= 2.0
-        score += _side_route_keep_bonus(hand, tile_id, route)
+        score += _daisangen_outside_keep_bonus(hand, tile_id)
     elif name == "suuankou":
         if count >= 3:
             score += 20.0
@@ -2159,6 +2356,8 @@ def _route_keep_score(hand: TileSet, tile_id: int, route: RouteEstimate) -> floa
             score += 14.0
         elif count == 1 and tile_id not in HONORS:
             score -= 1.5
+        if tile_id in route.targets:
+            score += 5.0
         score += _side_route_keep_bonus(hand, tile_id, route)
     elif name == "kokushi":
         if tile_id in TERMINAL_AND_HONOR_IDS:
@@ -2211,6 +2410,39 @@ def _tile_keep_bias(hand: TileSet, tile_id: int) -> float:
     return bias
 
 
+def _daisangen_outside_keep_bonus(hand: TileSet, tile_id: int) -> float:
+    if tile_id in DRAGONS:
+        return 0.0
+    count = hand.counts[tile_id]
+    bonus = 0.0
+    if count >= 2:
+        bonus += 12.0
+        if count >= 3:
+            bonus += 4.0
+    if tile_id >= 27:
+        return bonus - (2.0 if count == 1 else 0.0)
+    if _is_essential_sequence_member(hand.counts, tile_id):
+        bonus += 10.0
+    elif _is_any_sequence_member(hand.counts, tile_id):
+        bonus += 4.0
+    local = _suit_local_shape_bonus(hand.counts, tile_id)
+    bonus += local * 1.2
+    if count == 1 and local <= 0:
+        bonus -= 4.0
+    return bonus
+
+
+def _is_any_sequence_member(counts: tuple[int, ...], tile_id: int) -> bool:
+    if tile_id >= 27:
+        return False
+    start = tile_id - (tile_id % 9)
+    rank = tile_id % 9
+    for seq_rank in range(max(0, rank - 2), min(rank, 6) + 1):
+        if all(counts[start + seq_rank + offset] > 0 for offset in range(3)):
+            return True
+    return False
+
+
 def _side_route_keep_bonus(hand: TileSet, tile_id: int, route: RouteEstimate) -> float:
     side_suit = _side_route_suit(hand.counts, route)
     if side_suit is None:
@@ -2232,7 +2464,7 @@ def _side_route_keep_bonus(hand: TileSet, tile_id: int, route: RouteEstimate) ->
         if count >= 2:
             bonus += 4.0
         elif count == 1:
-            bonus += 1.0
+            bonus -= 1.5
         return bonus
 
     penalty = -7.0 if count == 1 else -3.0

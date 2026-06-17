@@ -17,6 +17,8 @@ class RouteEvStrategyTests(unittest.TestCase):
                         table,
                         balls=case.balls,
                         is_reach=case.is_reach,
+                        dora_id=case.dora_id,
+                        ura_dora_id=case.ura_dora_id,
                     )
                     choice = decision.area
                     reason = decision.reason
@@ -26,6 +28,8 @@ class RouteEvStrategyTests(unittest.TestCase):
                         balls=case.balls,
                         is_reach=case.is_reach,
                         drawn_tile=case.drawn_tile,
+                        dora_id=case.dora_id,
+                        ura_dora_id=case.ura_dora_id,
                     )
                     choice = decision.discard_tile
                     reason = decision.reason
@@ -361,7 +365,7 @@ class RouteEvStrategyTests(unittest.TestCase):
         area = choose_route_ev_area(next_hand, table, balls=7)
 
         self.assertEqual(31, discard.discard_tile)
-        self.assertIn("area=1:p=0.850:alt=0.600", discard.reason)
+        self.assertIn("next_area=1", discard.reason)
         self.assertIn(27, next_hand)
         self.assertEqual(1, area.area)
         self.assertIn(27, area.target_tiles)
@@ -571,13 +575,14 @@ class RouteEvStrategyTests(unittest.TestCase):
     def test_actual_review_questions_are_deterministic_and_protection_aware(self):
         table = load_tables()["nyukyu_base_table.bytes"]
 
-        # line 3073 question: no bespoke rule is added; current general scoring cuts 2万.
+        # line 3073 question: no bespoke rule is added; current general scoring
+        # cuts 1索 after the normal efficiency and next-area comparison.
         discard_3073 = choose_route_ev_discard(
             (0, 3, 5, 7, 9, 9, 10, 11, 11, 11, 14, 16, 27, 1),
             balls=3,
             drawn_tile=1,
         )
-        self.assertEqual(27, discard_3073.discard_tile)
+        self.assertEqual(9, discard_3073.discard_tile)
 
         # line 3989 question: 北(id=30) is protected, so effective denominators
         # are area6=1400/9000 and area7=1700/8000; area7 remains best.
