@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import json
 from pathlib import Path
 import argparse
 import random
 import time
 from typing import Iterator
 
+from janq_lab.automation.bankroll import choose_bet_tier, parse_bet_ladder
 from janq_lab.automation.config import AutomationConfig, load_config
 from janq_lab.automation.executor import ExecutionResult, make_executor
 from janq_lab.automation.policy import BotAction, BotDecision, StrategyPolicy
@@ -24,6 +27,8 @@ CONFIRMATION_EVENTS = {
     "press_main": "send_action_start",
 }
 
+ACTIONABLE_PHASES = frozenset(("agari_wait", "bet_wait", "free_wait", "shoot_wait", "user_wait"))
+
 
 @dataclass(frozen=True)
 class PendingAction:
@@ -34,9 +39,9 @@ class PendingAction:
 
 
 class ProbeTailer:
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, *, start_at_end: bool = False):
         self.path = Path(path)
-        self.offset = 0
+        self.offset = self.path.stat().st_size if start_at_end and self.path.exists() else 0
         self.line_number = 0
 
     def read_new_events(self) -> Iterator[ProbeEvent]:
@@ -81,10 +86,33 @@ class AutomationRunner:
         self.last_decision_time = 0.0
         self.start_completed_hands = 0
         self.running = True
+        self.bet_ladder = parse_bet_ladder(config.bet_ladder)
+        initial_bet = config.forced_bet if config.forced_bet is not None else self.bet_ladder[0]
+        self.target_bet = initial_bet
+        self.selected_bet: int | None = None
+        self.selected_bet_target: int | None = None
+        self.selected_bet_mode: str | None = None
+        self._last_bridge_target_bet: int | None = None
+        self._bet_reselect_requested_at: float | None = None
+        self._bet_reselect_target_bet: int | None = None
 
     def run(self) -> None:
         self.logger.write("bot_session_start", {"config": self.config.__dict__})
-        tailer = ProbeTailer(self.config.events_path)
+        self._update_bet_target("session_start")
+        tailer = ProbeTailer(
+            self.config.events_path,
+            start_at_end=(
+                self.config.mode != "dry_run"
+                and not self.config.bootstrap_existing_events
+            ),
+        )
+        if self.config.mode != "dry_run":
+            for event in tailer.read_new_events():
+                self._track_bet_selection(event)
+                self.state = reduce_event(self.state, event)
+            self.start_completed_hands = self.state.completed_hands
+            self.logger.write("bot_bootstrap_state", self.state.to_dict())
+            self._update_bet_target("bootstrap_state")
         if self.config.mode == "plugin_live" and self.config.enter_janq_on_start:
             startup_action = BotAction("enter_janq")
             startup_result = self.executor.execute(startup_action, self.rng)
@@ -92,10 +120,6 @@ class AutomationRunner:
             if not startup_result.success:
                 self._pause(f"startup_action_failed:{startup_result.error}")
         if self.config.mode != "dry_run":
-            for event in tailer.read_new_events():
-                self.state = reduce_event(self.state, event)
-            self.start_completed_hands = self.state.completed_hands
-            self.logger.write("bot_bootstrap_state", self.state.to_dict())
             if self.running:
                 self._maybe_decide(time.monotonic())
         start = time.monotonic()
@@ -110,6 +134,7 @@ class AutomationRunner:
                 if not self.running:
                     break
             self._check_pending_timeout(time.monotonic())
+            self._check_bet_reselect_timeout(time.monotonic())
             if not any_event:
                 time.sleep(self.config.poll_interval_seconds)
         self.logger.write(
@@ -126,7 +151,34 @@ class AutomationRunner:
         self.state = reduce_event(self.state, event)
         if self.state != old_state:
             self.logger.write("bot_state", self.state.to_dict())
+            self._update_bet_target("state_change")
+        self._track_bet_selection(event)
+        if event.type in ("janq_navigation_login_blocked", "janq_runtime_login_blocked"):
+            self._pause(
+                "login_blocked_or_repeated_dialog",
+                payload={"probe_payload": event.payload},
+            )
+            return
+        if event.type == "janq_navigation_reselect_failed":
+            self._pause(
+                "bet_reselect_failed_to_leave_game",
+                payload={"probe_payload": event.payload},
+            )
+            return
+        if self.state.phase not in ACTIONABLE_PHASES:
+            self.last_decision_key = None
         if self.pending is not None and event.type == self.pending.expected_event:
+            mismatch = _confirmation_payload_mismatch(self.pending.action, event)
+            if mismatch is not None:
+                self._pause(
+                    f"confirmation_payload_mismatch:{self.pending.expected_event}",
+                    payload={
+                        "action": self.pending.action.to_dict(),
+                        "probe_payload": event.payload,
+                        "mismatch": mismatch,
+                    },
+                )
+                return
             self.logger.write(
                 "bot_confirmed",
                 {
@@ -142,8 +194,69 @@ class AutomationRunner:
             return
         self._maybe_decide(current_time)
 
+    def _track_bet_selection(self, event: ProbeEvent) -> None:
+        if event.type in ("probe_loaded", "probe_unloaded"):
+            self.selected_bet = None
+            self.selected_bet_target = None
+            self.selected_bet_mode = None
+            self._bet_reselect_requested_at = None
+            self._bet_reselect_target_bet = None
+            self.logger.write("bot_bet_selection_reset", {"event_type": event.type})
+            return
+        if event.type == "janq_navigation_ready":
+            self._track_current_game_bet(event, source="navigation_ready")
+            return
+        if event.type == "game_state_snapshot":
+            self._track_current_game_bet(event, source="game_state_snapshot")
+            return
+        if event.type == "janq_navigation_bet_selected":
+            payload = event.payload or {}
+            bet = _optional_int(payload.get("bet"))
+            if bet is not None:
+                self.selected_bet = bet
+                self.selected_bet_target = _optional_int(payload.get("targetBet"))
+                mode = payload.get("selectionMode")
+                self.selected_bet_mode = mode if isinstance(mode, str) else None
+                self._bet_reselect_requested_at = None
+                self._bet_reselect_target_bet = None
+                self.logger.write(
+                    "bot_bet_selected",
+                    {
+                        "bet": bet,
+                        "target_bet": self.target_bet,
+                        "selection_target_bet": self.selected_bet_target,
+                        "selection_mode": self.selected_bet_mode,
+                        "payload": event.payload,
+                    },
+                )
+
+    def _track_current_game_bet(self, event: ProbeEvent, *, source: str) -> None:
+        payload = event.payload or {}
+        bet = _optional_int(payload.get("currentBet"))
+        if bet is None:
+            bet = _optional_int(payload.get("betRate"))
+        if bet is None or bet <= 0:
+            return
+        if self.selected_bet == bet and self.selected_bet_mode == source:
+            return
+        self.selected_bet = bet
+        self.selected_bet_target = None
+        self.selected_bet_mode = source
+        self.logger.write(
+            "bot_current_bet_observed",
+            {
+                "bet": bet,
+                "target_bet": self.target_bet,
+                "source": source,
+                "payload": payload,
+            },
+        )
+
     def _maybe_decide(self, now: float) -> None:
         if self.pending is not None:
+            return
+        if self.state.phase == "bet_wait" and self._bet_selection_status() != "ready":
+            self._handle_bet_selection_gap(now)
             return
         if self.state.decision_key == self.last_decision_key:
             return
@@ -179,6 +292,23 @@ class AutomationRunner:
                 payload={"action": self.pending.action.to_dict()},
             )
 
+    def _check_bet_reselect_timeout(self, now: float) -> None:
+        if self._bet_reselect_requested_at is None:
+            return
+        if now - self._bet_reselect_requested_at <= self.config.bet_reselect_timeout_seconds:
+            return
+        self._pause(
+            "bet_reselect_timeout",
+            payload={
+                "selected_bet": self.selected_bet,
+                "selection_target_bet": self.selected_bet_target,
+                "selection_mode": self.selected_bet_mode,
+                "target_bet": self.target_bet,
+                "requested_target_bet": self._bet_reselect_target_bet,
+                "mjchip": self.state.currency.mjchip,
+            },
+        )
+
     def _should_stop(self, now: float, start: float) -> bool:
         if self._completed_this_session() >= self.config.max_hands:
             self.logger.write("bot_pause", {"reason": "max_hands"})
@@ -194,6 +324,20 @@ class AutomationRunner:
             if self.config.stop_win_mjchip is not None and delta >= abs(self.config.stop_win_mjchip):
                 self.logger.write("bot_pause", {"reason": "stop_win_mjchip", "delta_mjchip": delta})
                 return True
+        if (
+            self.config.target_mjchip is not None
+            and self.state.currency.mjchip is not None
+            and self.state.currency.mjchip >= self.config.target_mjchip
+        ):
+            self.logger.write(
+                "bot_pause",
+                {
+                    "reason": "target_mjchip",
+                    "mjchip": self.state.currency.mjchip,
+                    "target_mjchip": self.config.target_mjchip,
+                },
+            )
+            return True
         return False
 
     def _completed_this_session(self) -> int:
@@ -206,12 +350,127 @@ class AutomationRunner:
         self.logger.write("bot_pause", body)
         self.running = False
 
+    def _update_bet_target(self, reason: str) -> None:
+        decision = choose_bet_tier(
+            self.state.currency.mjchip,
+            self.bet_ladder,
+            current_bet=self.target_bet,
+            forced_bet=self.config.forced_bet,
+            up_multiple=self.config.bet_up_multiple,
+            down_multiple=self.config.bet_down_multiple,
+        )
+        changed = decision.bet != self.target_bet
+        self.target_bet = decision.bet
+        if changed or reason == "session_start" or self._last_bridge_target_bet != self.target_bet:
+            self._write_bridge_settings(decision.reason)
+            self.logger.write(
+                "bot_bet_policy",
+                {
+                    "reason": reason,
+                    "target_bet": self.target_bet,
+                    "selected_bet": self.selected_bet,
+                    "policy_reason": decision.reason,
+                    "mjchip": self.state.currency.mjchip,
+                    "bet_ladder": self.bet_ladder,
+                },
+            )
+
+    def _write_bridge_settings(self, policy_reason: str) -> None:
+        path = Path(self.config.bridge_dir) / "settings.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "targetBet": self.target_bet,
+            "betLadder": list(self.bet_ladder),
+            "betPolicy": "bankroll_200_100",
+            "betUpMultiple": self.config.bet_up_multiple,
+            "betDownMultiple": self.config.bet_down_multiple,
+            "targetMjchip": self.config.target_mjchip,
+            "currentMjchip": self.state.currency.mjchip,
+            "policyReason": policy_reason,
+            "updatedAt": datetime.now(timezone.utc).isoformat(),
+        }
+        temp_path = path.with_name(f".{path.name}.tmp")
+        temp_path.write_text(
+            json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        for attempt in range(10):
+            try:
+                temp_path.replace(path)
+                self._last_bridge_target_bet = self.target_bet
+                return
+            except PermissionError:
+                if attempt == 9:
+                    raise
+                time.sleep(0.05)
+
+    def _bet_tier_change_required(self) -> bool:
+        return self._bet_selection_status() != "ready"
+
+    def _bet_selection_status(self) -> str:
+        if self.config.mode != "plugin_live":
+            if self.selected_bet is None:
+                return "ready"
+            return "ready" if self.selected_bet == self.target_bet else "mismatch"
+        if self.selected_bet is None:
+            return "unknown" if self.config.require_selected_bet_confirmation else "ready"
+        if self.selected_bet != self.target_bet:
+            if self.selected_bet_target == self.target_bet:
+                return "fallback_mismatch"
+            return "stale"
+        if self.selected_bet_target is not None and self.selected_bet_target != self.target_bet:
+            return "stale"
+        return "ready"
+
+    def _handle_bet_selection_gap(self, now: float) -> None:
+        status = self._bet_selection_status()
+        payload = {
+            "status": status,
+            "selected_bet": self.selected_bet,
+            "selection_target_bet": self.selected_bet_target,
+            "selection_mode": self.selected_bet_mode,
+            "target_bet": self.target_bet,
+            "mjchip": self.state.currency.mjchip,
+        }
+        if status == "fallback_mismatch":
+            self._pause("bet_target_unavailable_or_fallback", payload=payload)
+            return
+        if self.config.mode != "plugin_live" or not self.config.auto_reselect_bet:
+            self._pause("bet_tier_change_required", payload=payload)
+            return
+        if self._bet_reselect_requested_at is not None:
+            self.logger.write("bot_bet_reselect_wait", payload)
+            return
+
+        action = BotAction("reselect_bet")
+        self.logger.write("bot_bet_reselect_requested", {"action": action.to_dict(), **payload})
+        result = self.executor.execute(action, self.rng)
+        self.logger.write("bot_bet_reselect_action", result.to_dict())
+        if not result.success:
+            self._pause(f"bet_reselect_failed:{result.error}", payload=payload)
+            return
+        self._bet_reselect_requested_at = now
+        self._bet_reselect_target_bet = self.target_bet
+        self.last_decision_time = now
+
 
 def decide_once(config: AutomationConfig, events: list[ProbeEvent]) -> BotDecision:
     runner = AutomationRunner(config, logger=SessionLogger(Path(config.session_dir) / "decide_once.jsonl"))
     for event in events:
         runner.state = reduce_event(runner.state, event)
     return runner.policy.decide(runner.state)
+
+
+def _optional_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _confirmation_payload_mismatch(action: BotAction, event: ProbeEvent) -> str | None:
+    if action.kind == "shot" and event.type == "send_action_shot":
+        actual = _optional_int(event.payload.get("area"))
+        if action.area is not None and actual != action.area:
+            return f"shot_area:{action.area}!={actual}"
+    return None
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -223,6 +482,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--strategy", choices=("public", "greedy", "route_ev"), default=None)
     parser.add_argument("--max-hands", type=int, default=None)
     parser.add_argument("--max-runtime-seconds", type=float, default=None)
+    parser.add_argument("--target-mjchip", type=int, default=None)
+    parser.add_argument("--forced-bet", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args(argv)
 
@@ -234,6 +495,8 @@ def main(argv: list[str] | None = None) -> None:
         strategy=args.strategy,
         max_hands=args.max_hands,
         max_runtime_seconds=args.max_runtime_seconds,
+        target_mjchip=args.target_mjchip,
+        forced_bet=args.forced_bet,
     )
     runner = AutomationRunner(config, rng=random.Random(args.seed))
     runner.run()

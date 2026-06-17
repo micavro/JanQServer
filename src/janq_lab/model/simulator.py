@@ -45,6 +45,7 @@ class TurnEvent:
     riichi_before: bool = False
     riichi_declared: bool = False
     ippatsu_chance: bool = False
+    auto_surrender: bool = False
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,8 @@ class SimulationResult:
     riichi_turn: int | None = None
     double_riichi: bool = False
     ippatsu_win: bool = False
+    auto_surrender: bool = False
+    auto_surrender_shanten: int | None = None
 
     @property
     def shots(self) -> int:
@@ -158,17 +161,16 @@ def simulate_hand(
             area_reason=area_decision.reason,
         )
         riichi_declared = (not riichi_active) and discard_decision.declare_riichi
-        turns.append(
-            TurnEvent(
-                shot=shot,
-                discard=discard_decision,
-                riichi_before=riichi_active,
-                riichi_declared=riichi_declared,
-                ippatsu_chance=ippatsu_chance,
-            )
-        )
-
         if discard_decision.is_agari:
+            turns.append(
+                TurnEvent(
+                    shot=shot,
+                    discard=discard_decision,
+                    riichi_before=riichi_active,
+                    riichi_declared=riichi_declared,
+                    ippatsu_chance=ippatsu_chance,
+                )
+            )
             return SimulationResult(
                 win=True,
                 turns=tuple(turns),
@@ -181,7 +183,48 @@ def simulate_hand(
 
         if discard_decision.discard_tile is None:
             raise RuntimeError("non-agari discard decision did not include a tile")
-        hand = hand.with_removed_one(discard_decision.discard_tile)
+        hand_after_discard = hand.with_removed_one(discard_decision.discard_tile)
+        auto_surrender_shanten = _auto_surrender_shanten(
+            discard_decision,
+            hand_after_discard,
+        )
+        auto_surrender = (
+            not hold_hand
+            and auto_surrender_shanten is not None
+            and balls <= auto_surrender_shanten
+        )
+        turns.append(
+            TurnEvent(
+                shot=shot,
+                discard=discard_decision,
+                riichi_before=riichi_active,
+                riichi_declared=riichi_declared,
+                ippatsu_chance=ippatsu_chance,
+                auto_surrender=auto_surrender,
+            )
+        )
+        if auto_surrender:
+            result_riichi = riichi_active or riichi_declared
+            result_riichi_turn = (
+                riichi_turn
+                if riichi_turn is not None
+                else len(turns)
+                if riichi_declared
+                else None
+            )
+            return SimulationResult(
+                win=False,
+                turns=tuple(turns),
+                final_hand=hand_after_discard,
+                riichi=result_riichi,
+                riichi_turn=result_riichi_turn,
+                double_riichi=result_riichi_turn == 1,
+                ippatsu_win=False,
+                auto_surrender=True,
+                auto_surrender_shanten=auto_surrender_shanten,
+            )
+
+        hand = hand_after_discard
         if riichi_declared:
             riichi_active = True
             riichi_turn = len(turns)
@@ -202,6 +245,15 @@ def simulate_hand(
 
 def random_initial_hand(rng: random.Random | None = None) -> TileSet:
     return random_wall_hand(rng)
+
+
+def _auto_surrender_shanten(
+    discard: DiscardDecision,
+    hand_after_discard: TileSet,
+) -> int | None:
+    if discard.shanten_after is not None:
+        return discard.shanten_after
+    return shanten(hand_after_discard)
 
 
 def _call_choose_area(

@@ -135,7 +135,10 @@ def reduce_event(state: BotGameState, event: ProbeEvent) -> BotGameState:
         currency = _currency_from_payload(payload, previous=state.currency)
         balls = _optional_int(payload.get("zandan"))
         is_agari = _optional_bool(payload.get("agari")) or False
-        phase = "resolving" if balls is not None and balls <= 1 and not is_agari else "user_wait"
+        if balls is not None and balls <= 0 and not is_agari:
+            phase = "resolving"
+        else:
+            phase = "wait"
         return replace(
             state,
             phase=phase,
@@ -210,30 +213,42 @@ def reduce_event(state: BotGameState, event: ProbeEvent) -> BotGameState:
 
 def _apply_snapshot(state: BotGameState, payload: dict[str, Any], **common: Any) -> BotGameState:
     hand = _snapshot_hand(payload.get("pais"))
+    mode = _enum_str(payload.get("gameMode")) or state.mode
     game_state = (
         _enum_str(payload.get("state"))
         or _enum_str(payload.get("requestState"))
         or state.game_state
     )
-    main_button = (
-        _enum_str(payload.get("mainButtonRequest"))
-        or _enum_str(payload.get("mainButtonType"))
-        or state.main_button
+    if "mainButtonRequest" in payload:
+        main_button = _enum_str(payload.get("mainButtonRequest"))
+    elif "mainButtonType" in payload:
+        main_button = _enum_str(payload.get("mainButtonType"))
+    else:
+        main_button = state.main_button
+    phase = _phase_from_snapshot(
+        game_state,
+        main_button,
+        len(hand) or len(state.hand),
+        mode=mode,
     )
-    phase = _phase_from_snapshot(game_state, main_button, len(hand) or len(state.hand))
     if state.phase in (
         "start_sent",
         "shot_sent",
         "discard_sent",
         "agari_sent",
         "resolving",
-        "user_wait",
+    ):
+        phase = state.phase
+    if (
+        state.phase == "user_wait"
+        and state.status is not None
+        and phase not in ("bet_wait", "free_wait", "agari_wait")
     ):
         phase = state.phase
     return replace(
         state,
         phase=phase,
-        mode=_optional_str(payload.get("gameMode")) or state.mode,
+        mode=mode,
         game_state=game_state,
         main_button=main_button,
         balls=_optional_int(payload.get("balls")) if "balls" in payload else state.balls,
@@ -245,19 +260,44 @@ def _apply_snapshot(state: BotGameState, payload: dict[str, Any], **common: Any)
     )
 
 
-def _phase_from_snapshot(game_state: str | None, main_button: str | None, hand_len: int) -> str:
+def _phase_from_snapshot(
+    game_state: str | None,
+    main_button: str | None,
+    hand_len: int,
+    *,
+    mode: str | None,
+) -> str:
     if main_button == "Bet":
         return "bet_wait"
     if main_button == "Free":
         return "free_wait"
     if main_button == "Agari":
         return "agari_wait"
-    if game_state == "ShootWait" or main_button == "Shot":
-        return "shoot_wait"
     if game_state == "UserWait":
         return "user_wait"
+    if game_state == "ShootWait":
+        return "shoot_wait"
+    if game_state == "BetWait":
+        return "bet_wait"
     if game_state == "Result":
         return "result"
+    if mode == "Start" or game_state in (
+        "AgariRun",
+        "BallEnter",
+        "BetRun",
+        "CheckInterrupt",
+        "ModeChange",
+        "RetryRun",
+        "RyukyokuRun",
+        "ShootCheck",
+        "ShootRun",
+        "StartEffect",
+        "SuteRun",
+        "YakuCheck",
+    ):
+        return "wait"
+    if main_button == "Shot":
+        return "shoot_wait"
     if hand_len == 14:
         return "user_wait"
     if hand_len == 13:

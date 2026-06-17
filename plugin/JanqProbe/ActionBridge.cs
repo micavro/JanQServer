@@ -174,6 +174,13 @@ internal static class ActionBridge
                 active = null;
                 return;
             }
+            if (item.Command.kind == "reselect_bet")
+            {
+                JanqNavigator.Start(reselectFromGame: true);
+                Finish(item, success: true, null, FindGameManager());
+                active = null;
+                return;
+            }
 
             var manager = FindGameManager();
             if (manager == null)

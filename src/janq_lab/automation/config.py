@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from janq_lab.automation.bankroll import parse_bet_ladder
+
 
 @dataclass(frozen=True)
 class AutomationConfig:
@@ -15,6 +17,7 @@ class AutomationConfig:
     bridge_dir: str = "_runtime/bridge"
     bridge_result_timeout_seconds: float = 18.0
     enter_janq_on_start: bool = False
+    bootstrap_existing_events: bool = False
     session_log_path: str | None = None
     session_dir: str = "_runtime/sessions"
     strategy: str = "route_ev"
@@ -22,6 +25,14 @@ class AutomationConfig:
     max_runtime_seconds: float = 3600.0
     stop_loss_mjchip: int | None = None
     stop_win_mjchip: int | None = None
+    target_mjchip: int | None = None
+    forced_bet: int | None = None
+    bet_ladder: str = "10,20,30,50,100,200"
+    bet_up_multiple: float = 200.0
+    bet_down_multiple: float = 100.0
+    auto_reselect_bet: bool = True
+    require_selected_bet_confirmation: bool = True
+    bet_reselect_timeout_seconds: float = 45.0
     poll_interval_seconds: float = 0.2
     decision_cooldown_seconds: float = 0.8
     confirm_timeout_seconds: float = 12.0
@@ -64,6 +75,15 @@ class AutomationConfig:
             raise ValueError("max_hands must be positive")
         if self.max_runtime_seconds <= 0:
             raise ValueError("max_runtime_seconds must be positive")
+        if self.target_mjchip is not None and self.target_mjchip <= 0:
+            raise ValueError("target_mjchip must be positive")
+        if self.forced_bet is not None and self.forced_bet <= 0:
+            raise ValueError("forced_bet must be positive")
+        if self.bet_up_multiple <= 0 or self.bet_down_multiple <= 0:
+            raise ValueError("bet multiples must be positive")
+        if self.bet_reselect_timeout_seconds <= 0:
+            raise ValueError("bet_reselect_timeout_seconds must be positive")
+        parse_bet_ladder(self.bet_ladder)
         if self.action_delay_min_seconds < 0 or self.action_delay_max_seconds < 0:
             raise ValueError("action delays must be non-negative")
         if self.action_delay_min_seconds > self.action_delay_max_seconds:

@@ -22,6 +22,7 @@ internal sealed class ActionBridgeRunner : MonoBehaviour
 
     private void Update()
     {
+        LoginDialogMonitor.Tick();
         JanqNavigator.Tick();
         ActionBridge.Tick();
     }

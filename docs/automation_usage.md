@@ -19,15 +19,61 @@ login button. Start the copied game and bot together with:
 .\start_janq_bot.ps1 -MaxHands 20
 ```
 
-The script starts only the copied `sega_net_MJ\MJ\MJ.exe`, minimizes it, and
-then starts `plugin_live`. The bridge advances the known startup screens,
+The script starts only the copied `sega_net_MJ\MJ\MJ.exe` in windowed mode
+(`-screen-fullscreen 0`, default 1280x720), optionally minimizes it, and then
+starts `plugin_live`. The bridge advances the known startup screens,
 uses the client's saved-account login action, enters Casino -> JanQ, and
-selects the minimum currently available normal bet. Credentials are neither
-read nor written by the bridge.
+selects the configured normal bet. Credentials are neither read nor written by
+the bridge.
 
 The game sets `Application.runInBackground`, so it continues updating while
 minimized or unfocused. Actions use in-client handlers and do not move the
 system cursor.
+
+If login hits a known error dialog, such as the same account being active on
+another device, the probe records `janq_navigation_login_dialog_dismissed` and
+returns to the title flow without moving the mouse. Login-error dialogs are
+tagged with `dialogReason: account_conflict_or_login_error`. If the same
+dialog repeats three times, the probe records `janq_navigation_login_blocked`
+and the runner pauses with `login_blocked_or_repeated_dialog`.
+
+If the same login-error dialog appears while the bot is already in a live run,
+the probe records `janq_runtime_login_dialog_observed` and
+`janq_runtime_login_blocked`. The runner pauses with the same
+`login_blocked_or_repeated_dialog` reason instead of sending more game actions.
+
+## Bet tier policy
+
+The live runner is the only bet-policy owner. It writes
+`_runtime/bridge/settings.json` before navigation and whenever observed
+`mjchip` changes the target tier. The plugin reads that file when the Casino
+JanQ bet menu is built and selects the requested `targetBet` if it is
+available.
+
+With `auto_reselect_bet: true`, the runner will not press BET when the actual
+selected tier is unknown, stale, or different from the current policy target.
+Instead it sends `reselect_bet`; the plugin jumps back through Casino -> JanQ
+from a safe `BetWait` point and rebuilds the bet menu so the new target can be
+selected. The runner resumes only after `janq_navigation_bet_selected`
+confirms the current target. If the plugin already tried the current target
+and could only select a fallback candidate, the runner pauses instead of
+looping or betting the wrong tier.
+
+Default bankroll policy is the 200/100 ladder:
+
+- ladder: `10,20,30,50,100,200`
+- upgrade: bankroll `>= 200 * next_bet`
+- downgrade: bankroll `< 100 * current_bet`
+- absolute run target: `target_mjchip: 1000000`
+
+For a 10G -> 20G selection test, force the target tier at startup:
+
+```powershell
+.\start_janq_bot.ps1 -MaxHands 2 -ForcedBet 20
+```
+
+The probe records `janq_navigation_bet_selected` with the target bet, selected
+bet, selection mode, level, and eligible candidates.
 
 ## Start with dry-run
 
@@ -58,6 +104,9 @@ Casino navigation.
 The runner waits for probe confirmation after each live action. If the
 expected `send_action_*` event does not appear before the confirmation timeout,
 the runner writes `bot_pause` and stops.
+For shot actions, the runner also checks the confirmed area payload; if the
+plugin requested one area but the client sends another, it pauses with
+`confirmation_payload_mismatch:send_action_shot`.
 
 `max_hands` counts hands completed during the current bot session. A win result
 or automatic exhaustive draw ends a hand. The runner stops immediately at the
@@ -76,6 +125,13 @@ python -m janq_lab.automation.bot --config automation.example.yaml --mode ui_liv
 - `bot_startup_action`: result of the optional `enter_janq` command.
 - `bot_decision`: selected action and policy details.
 - `bot_action_done`: dry-run, bridge, or UI action result.
+- `bot_bet_policy`: target bet tier chosen from current bankroll.
+- `bot_bet_selected`: bet tier confirmed by the Casino JanQ menu.
+- `bot_bet_reselect_requested`: runner requested a Casino -> JanQ reselect
+  before pressing BET.
+- `login_blocked_or_repeated_dialog`: login repeatedly returned an error
+  dialog, or a login-error dialog appeared during a live run, commonly because
+  the account is still active elsewhere.
 - `bot_confirmed`: live action observed through `JanqProbe`.
 - `bot_pause`: stop or safety pause reason.
 - `bot_session_summary`: final state and pending action, if any.

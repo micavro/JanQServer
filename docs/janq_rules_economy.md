@@ -42,7 +42,8 @@ This document records the rule/economy model used by `janq_lab` simulations.
 - No calls, no kan, no red dora, no fu.
 - East round is fixed. East, white, green, and red dragon are value tiles.
 - South, West, and North are not value-tile yaku by themselves.
-- Reach, double reach, ippatsu, and ura-dora are normal-game-only effects.
+- Double reach, ippatsu, and ura-dora are normal-game-only effects.
+- Hachiren challenge hands start in reach state and therefore add one reach han.
 - First draw in hachiren/yakuman challenge does not award tenhou or ippatsu.
 - 13+ han is counted yakuman.
 - Natural yakuman can overlap up to four yakuman units.

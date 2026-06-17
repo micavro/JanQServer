@@ -7,7 +7,7 @@ from typing import Any
 
 from janq_lab.assets.nyukyu import load_tables
 from janq_lab.automation.state import BotGameState
-from janq_lab.model.hand import is_complete_hand, tile_set
+from janq_lab.model.hand import is_complete_hand
 from janq_lab.strategy.bonus import choose_bonus_area, choose_bonus_discard
 from janq_lab.strategy.greedy import (
     AreaDecision,
@@ -88,7 +88,9 @@ class StrategyPolicy:
     def _decide_shot(self, state: BotGameState) -> BotDecision:
         if len(state.hand) != 13:
             return BotDecision(None, f"shoot_wait_requires_13_tiles:{len(state.hand)}", self.strategy, state.decision_key)
-        hand = tile_set(state.hand)
+        hand = state.hand_set
+        if hand is None:
+            return BotDecision(None, "shoot_wait_invalid_hand", self.strategy, state.decision_key)
         balls = state.balls if state.balls is not None else 1
         area_decision = self._choose_area(state, hand, balls)
         return BotDecision(
@@ -102,7 +104,9 @@ class StrategyPolicy:
     def _decide_user_wait(self, state: BotGameState) -> BotDecision:
         if len(state.hand) != 14:
             return BotDecision(None, f"user_wait_requires_14_tiles:{len(state.hand)}", self.strategy, state.decision_key)
-        hand = tile_set(state.hand)
+        hand = state.hand_set
+        if hand is None:
+            return BotDecision(None, "user_wait_invalid_hand", self.strategy, state.decision_key)
         if is_complete_hand(hand):
             return BotDecision(
                 action=BotAction("agari"),

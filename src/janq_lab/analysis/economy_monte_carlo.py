@@ -54,7 +54,9 @@ class SessionResult:
     bet: int
     payout: int
     normal_win: bool
+    paren_attempts: int
     paren_wins: int
+    yakuman_challenge_attempts: int
     yakuman_challenge_wins: int
     yakuman_challenge_units: int
     normal_score: JanqScore | None
@@ -67,6 +69,8 @@ class SessionResult:
     normal_riichi: bool = False
     normal_double_riichi: bool = False
     normal_ippatsu_win: bool = False
+    normal_auto_surrender: bool = False
+    normal_auto_surrender_shanten: int | None = None
 
     @property
     def net(self) -> int:
@@ -104,10 +108,21 @@ class EconomySummary:
     normal_wins: int
     normal_win_rate: float
     normal_win_rate_ci95: Interval
+    normal_auto_surrenders: int
+    normal_auto_surrender_rate: float
     paren_entries: int
     paren_entry_rate: float
     yakuman_challenge_entries: int
     yakuman_challenge_entry_rate: float
+    paren_attempts: int
+    paren_win_rate: float
+    yakuman_challenge_attempts: int
+    yakuman_challenge_win_rate: float
+    bonus_attempts: int
+    bonus_wins: int
+    bonus_win_rate: float
+    all_hand_attempts: int
+    all_hand_win_rate: float
     avg_paren_wins: float
     avg_yakuman_challenge_wins: float
     avg_yakuman_challenge_units: float
@@ -146,10 +161,21 @@ class EconomySummary:
             "normal_wins": self.normal_wins,
             "normal_win_rate": self.normal_win_rate,
             "normal_win_rate_ci95": self.normal_win_rate_ci95.__dict__,
+            "normal_auto_surrenders": self.normal_auto_surrenders,
+            "normal_auto_surrender_rate": self.normal_auto_surrender_rate,
             "paren_entries": self.paren_entries,
             "paren_entry_rate": self.paren_entry_rate,
             "yakuman_challenge_entries": self.yakuman_challenge_entries,
             "yakuman_challenge_entry_rate": self.yakuman_challenge_entry_rate,
+            "paren_attempts": self.paren_attempts,
+            "paren_win_rate": self.paren_win_rate,
+            "yakuman_challenge_attempts": self.yakuman_challenge_attempts,
+            "yakuman_challenge_win_rate": self.yakuman_challenge_win_rate,
+            "bonus_attempts": self.bonus_attempts,
+            "bonus_wins": self.bonus_wins,
+            "bonus_win_rate": self.bonus_win_rate,
+            "all_hand_attempts": self.all_hand_attempts,
+            "all_hand_win_rate": self.all_hand_win_rate,
             "avg_paren_wins": self.avg_paren_wins,
             "avg_yakuman_challenge_wins": self.avg_yakuman_challenge_wins,
             "avg_yakuman_challenge_units": self.avg_yakuman_challenge_units,
@@ -223,8 +249,17 @@ def run_economy_monte_carlo(
     normal_riichi_count = sum(1 for result in session_results if result.normal_riichi)
     normal_ippatsu_wins = sum(1 for result in session_results if result.normal_ippatsu_win)
     normal_double_riichi_count = sum(1 for result in session_results if result.normal_double_riichi)
+    normal_auto_surrenders = sum(1 for result in session_results if result.normal_auto_surrender)
     paren_entries = sum(1 for result in session_results if result.entered_paren)
     yakuman_entries = sum(1 for result in session_results if result.entered_yakuman_challenge)
+    paren_attempts = sum(result.paren_attempts for result in session_results)
+    yakuman_attempts = sum(result.yakuman_challenge_attempts for result in session_results)
+    paren_wins = sum(result.paren_wins for result in session_results)
+    yakuman_wins = sum(result.yakuman_challenge_wins for result in session_results)
+    bonus_attempts = paren_attempts + yakuman_attempts
+    bonus_wins = paren_wins + yakuman_wins
+    all_hand_attempts = sessions + bonus_attempts
+    all_hand_wins = normal_wins + bonus_wins
     normal_levels = Counter(
         result.normal_score.yaku_level
         for result in session_results
@@ -285,10 +320,25 @@ def run_economy_monte_carlo(
         normal_wins=normal_wins,
         normal_win_rate=normal_wins / sessions,
         normal_win_rate_ci95=wilson_interval(normal_wins, sessions),
+        normal_auto_surrenders=normal_auto_surrenders,
+        normal_auto_surrender_rate=normal_auto_surrenders / sessions,
         paren_entries=paren_entries,
         paren_entry_rate=paren_entries / sessions,
         yakuman_challenge_entries=yakuman_entries,
         yakuman_challenge_entry_rate=yakuman_entries / sessions,
+        paren_attempts=paren_attempts,
+        paren_win_rate=paren_wins / paren_attempts if paren_attempts else 0.0,
+        yakuman_challenge_attempts=yakuman_attempts,
+        yakuman_challenge_win_rate=(
+            yakuman_wins / yakuman_attempts if yakuman_attempts else 0.0
+        ),
+        bonus_attempts=bonus_attempts,
+        bonus_wins=bonus_wins,
+        bonus_win_rate=bonus_wins / bonus_attempts if bonus_attempts else 0.0,
+        all_hand_attempts=all_hand_attempts,
+        all_hand_win_rate=(
+            all_hand_wins / all_hand_attempts if all_hand_attempts else 0.0
+        ),
         avg_paren_wins=mean([float(result.paren_wins) for result in session_results]),
         avg_yakuman_challenge_wins=mean(
             [float(result.yakuman_challenge_wins) for result in session_results]
@@ -312,8 +362,8 @@ def run_economy_monte_carlo(
                 for result in session_results
                 if result.normal_score is not None and result.normal_score.is_yakuman
             ),
-            "paren_wins": sum(result.paren_wins for result in session_results),
-            "yakuman_challenge_wins": sum(result.yakuman_challenge_wins for result in session_results),
+            "paren_wins": paren_wins,
+            "yakuman_challenge_wins": yakuman_wins,
         },
         yakuman_yaku_counts=dict(sorted(yakuman_total.items())),
         yakuman_yaku_counts_by_phase={
@@ -368,7 +418,9 @@ def simulate_session(
             bet=bet,
             payout=0,
             normal_win=False,
+            paren_attempts=0,
             paren_wins=0,
+            yakuman_challenge_attempts=0,
             yakuman_challenge_wins=0,
             yakuman_challenge_units=0,
             normal_score=None,
@@ -377,6 +429,8 @@ def simulate_session(
             normal_riichi=normal.simulation.riichi,
             normal_double_riichi=normal.simulation.double_riichi,
             normal_ippatsu_win=False,
+            normal_auto_surrender=normal.simulation.auto_surrender,
+            normal_auto_surrender_shanten=normal.simulation.auto_surrender_shanten,
         )
 
     normal_payout = payout_for_score(normal.score, bet=bet)
@@ -387,6 +441,7 @@ def simulate_session(
     yakuman_bonus_payout = 0
     paren_scores: list[JanqScore] = []
     yakuman_scores: list[JanqScore] = []
+    paren_attempts = 0
     paren_wins = 0
     enter_yakuman = normal.score.is_yakuman
     initial_yakuman_units = max(1, normal.score.yakuman_count) if normal.score.is_yakuman else 0
@@ -400,6 +455,7 @@ def simulate_session(
                 break
             number = choose_paren_number(previous_score, special_records, rng, mode=paren_table_mode)
             record = choose_enabled_record(special_records.paren_tables[number].records, rng)
+            paren_attempts += 1
             paren = _simulate_scored_hand(
                 tile_set(record.tiles),
                 paren_table,
@@ -409,6 +465,7 @@ def simulate_session(
                 choose_discard=choose_bonus_discard,
                 dora_id=record.dora_id,
                 hold_hand=True,
+                force_reach=True,
             )
             if paren.score is None:
                 break
@@ -427,10 +484,12 @@ def simulate_session(
 
     yakuman_wins = 0
     yakuman_units = 0
+    yakuman_attempts = 0
     if enter_yakuman:
         cumulative_yakuman_units = initial_yakuman_units
         for _ in range(max_bonus_hands):
             record = choose_enabled_record(special_records.yakuman_records, rng)
+            yakuman_attempts += 1
             yakuman = _simulate_scored_hand(
                 tile_set(record.tiles),
                 yakuman_table,
@@ -459,7 +518,9 @@ def simulate_session(
         bet=bet,
         payout=payout,
         normal_win=True,
+        paren_attempts=paren_attempts,
         paren_wins=paren_wins,
+        yakuman_challenge_attempts=yakuman_attempts,
         yakuman_challenge_wins=yakuman_wins,
         yakuman_challenge_units=yakuman_units,
         normal_score=normal.score,
@@ -486,6 +547,7 @@ def _simulate_scored_hand(
     dora_id: int | None,
     ura_dora_id: int | None = None,
     hold_hand: bool = False,
+    force_reach: bool = False,
 ) -> ScoredHandResult:
     simulation = simulate_hand(
         initial_hand,
@@ -510,8 +572,8 @@ def _simulate_scored_hand(
         simulation.final_hand,
         dora_id=dora_id,
         ura_dora_id=ura_dora_id,
-        reach=simulation.riichi and not simulation.double_riichi,
-        double_reach=simulation.double_riichi,
+        reach=force_reach or (simulation.riichi and not simulation.double_riichi),
+        double_reach=simulation.double_riichi and not force_reach,
         ippatsu=simulation.ippatsu_win,
     )
     return ScoredHandResult(

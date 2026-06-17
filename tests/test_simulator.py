@@ -56,6 +56,23 @@ fixed_area.uses_full_context = True
 declare_then_agari.uses_full_context = True
 
 
+def discard_drawn_tile(hand, balls, **kwargs):
+    del balls
+    state = hand if hasattr(hand, "counts") else tile_set(hand)
+    drawn_tile = kwargs["drawn_tile"]
+    after = state.with_removed_one(drawn_tile)
+    return DiscardDecision(
+        False,
+        drawn_tile,
+        shanten(after),
+        winning_tiles(after),
+        "discard_drawn_tile",
+    )
+
+
+discard_drawn_tile.uses_full_context = True
+
+
 def forbidden_hold_discard(*args, **kwargs):
     del args, kwargs
     raise AssertionError("HOLD mode must not call the discard policy")
@@ -79,6 +96,26 @@ class SimulatorTests(unittest.TestCase):
         self.assertTrue(result.turns[0].shot.fourth_copy)
         self.assertEqual(1, result.turns[0].shot.balls_before)
         self.assertEqual(1, result.turns[0].shot.balls_after)
+
+    def test_normal_mode_auto_surrenders_when_balls_do_not_exceed_shanten(self):
+        table = deterministic_table(33)
+        hand = [0, 1, 2, 3, 4, 5, 9, 10, 11, 18, 19, 27, 31]
+
+        result = simulate_hand(
+            hand,
+            table,
+            balls=2,
+            choose_area=fixed_area,
+            choose_discard=discard_drawn_tile,
+        )
+
+        self.assertFalse(result.win)
+        self.assertTrue(result.auto_surrender)
+        self.assertEqual(1, result.auto_surrender_shanten)
+        self.assertEqual(1, result.shots)
+        self.assertTrue(result.turns[0].auto_surrender)
+        self.assertEqual(1, result.turns[0].shot.balls_after)
+        self.assertEqual(tuple(sorted(hand)), result.final_hand.to_tiles())
 
     def test_hold_hand_auto_discards_draw_without_changing_locked_tiles(self):
         table = deterministic_table(5)

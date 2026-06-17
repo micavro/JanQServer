@@ -5,9 +5,10 @@ import time
 import unittest
 from pathlib import Path
 
-from janq_lab.automation.bot import AutomationRunner
+from janq_lab.automation.bankroll import choose_bet_tier, parse_bet_ladder
+from janq_lab.automation.bot import AutomationRunner, ProbeTailer
 from janq_lab.automation.config import AutomationConfig, load_config
-from janq_lab.automation.executor import PluginExecutor
+from janq_lab.automation.executor import ExecutionResult, PluginExecutor
 from janq_lab.automation.policy import BotAction, StrategyPolicy
 from janq_lab.automation.session_log import SessionLogger
 from janq_lab.automation.state import BotGameState, reduce_event
@@ -39,6 +40,234 @@ class AutomationTests(unittest.TestCase):
         config.validate()
         self.assertTrue(config.enter_janq_on_start)
 
+    def test_bankroll_policy_uses_200_100_hysteresis(self):
+        ladder = parse_bet_ladder("10,20,30,50,100,200")
+
+        self.assertEqual(
+            10,
+            choose_bet_tier(3999, ladder, current_bet=10).bet,
+        )
+        self.assertEqual(
+            20,
+            choose_bet_tier(4000, ladder, current_bet=10).bet,
+        )
+        self.assertEqual(
+            20,
+            choose_bet_tier(2500, ladder, current_bet=20).bet,
+        )
+        self.assertEqual(
+            10,
+            choose_bet_tier(1999, ladder, current_bet=20).bet,
+        )
+
+    def test_runner_writes_bridge_bet_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge = Path(tmp) / "bridge"
+            session_path = Path(tmp) / "session.jsonl"
+            config = AutomationConfig(
+                mode="dry_run",
+                bridge_dir=str(bridge),
+                session_log_path=str(session_path),
+                forced_bet=20,
+            )
+            runner = AutomationRunner(config, logger=SessionLogger(session_path))
+            runner._update_bet_target("test")
+            settings = json.loads((bridge / "settings.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(20, settings["targetBet"])
+        self.assertEqual([10, 20, 30, 50, 100, 200], settings["betLadder"])
+
+    def test_probe_tailer_can_start_at_end(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "events.jsonl"
+            path.write_text(
+                '{"ts":"2026-06-12T13:52:10+00:00","type":"old","payload":{}}\n',
+                encoding="utf-8",
+            )
+            tailer = ProbeTailer(path, start_at_end=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    '{"ts":"2026-06-12T13:52:11+00:00","type":"new","payload":{}}\n'
+                )
+
+            events = list(tailer.read_new_events())
+
+        self.assertEqual(["new"], [item.type for item in events])
+
+    def test_plugin_runner_reselects_stale_bet_before_betting(self):
+        class FakeExecutor:
+            def __init__(self):
+                self.actions = []
+
+            def execute(self, action, rng=None):
+                del rng
+                self.actions.append(action)
+                return ExecutionResult(True, "plugin_live", action.to_dict(), {})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            session_path = Path(tmp) / "session.jsonl"
+            config = AutomationConfig(
+                mode="plugin_live",
+                session_log_path=str(session_path),
+                session_dir=tmp,
+                decision_cooldown_seconds=0,
+            )
+            runner = AutomationRunner(config, logger=SessionLogger(session_path))
+            fake = FakeExecutor()
+            runner.executor = fake
+            runner.state = BotGameState(phase="bet_wait", main_button="Bet")
+            runner.target_bet = 10
+            runner.selected_bet = 20
+            runner.selected_bet_target = 20
+
+            runner._maybe_decide(1.0)
+
+        self.assertTrue(runner.running)
+        self.assertEqual(["reselect_bet"], [action.kind for action in fake.actions])
+
+    def test_plugin_runner_accepts_current_game_bet_from_snapshot(self):
+        class FakeExecutor:
+            def __init__(self):
+                self.actions = []
+
+            def execute(self, action, rng=None):
+                del rng
+                self.actions.append(action)
+                return ExecutionResult(True, "plugin_live", action.to_dict(), {})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            session_path = Path(tmp) / "session.jsonl"
+            config = AutomationConfig(
+                mode="plugin_live",
+                session_log_path=str(session_path),
+                session_dir=tmp,
+                decision_cooldown_seconds=0,
+            )
+            runner = AutomationRunner(config, logger=SessionLogger(session_path))
+            fake = FakeExecutor()
+            runner.executor = fake
+            runner.target_bet = 10
+
+            runner.process_event(
+                event(
+                    1,
+                    "game_state_snapshot",
+                    '{"gameMode":"Normal","state":"BetWait","requestState":"BetWait",'
+                    '"mainButtonType":"Bet","mainButtonRequest":"Bet","betRate":10,'
+                    '"pais":[1,2,3]}',
+                ),
+                now=1.0,
+            )
+
+        self.assertTrue(runner.running)
+        self.assertEqual(["press_main"], [action.kind for action in fake.actions])
+
+    def test_plugin_runner_pauses_when_current_target_falls_back(self):
+        class FakeExecutor:
+            def __init__(self):
+                self.actions = []
+
+            def execute(self, action, rng=None):
+                del rng
+                self.actions.append(action)
+                return ExecutionResult(True, "plugin_live", action.to_dict(), {})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            session_path = Path(tmp) / "session.jsonl"
+            config = AutomationConfig(
+                mode="plugin_live",
+                session_log_path=str(session_path),
+                session_dir=tmp,
+                decision_cooldown_seconds=0,
+            )
+            runner = AutomationRunner(config, logger=SessionLogger(session_path))
+            fake = FakeExecutor()
+            runner.executor = fake
+            runner.state = BotGameState(phase="bet_wait", main_button="Bet")
+            runner.target_bet = 20
+            runner.selected_bet = 10
+            runner.selected_bet_target = 20
+            runner.selected_bet_mode = "highest_below_target"
+
+            runner._maybe_decide(1.0)
+
+            rows = [
+                json.loads(line)
+                for line in session_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertFalse(runner.running)
+        self.assertEqual([], fake.actions)
+        self.assertEqual("bet_target_unavailable_or_fallback", rows[-1]["payload"]["reason"])
+
+    def test_plugin_runner_pauses_on_repeated_login_dialog(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session_path = Path(tmp) / "session.jsonl"
+            config = AutomationConfig(
+                mode="plugin_live",
+                session_log_path=str(session_path),
+                session_dir=tmp,
+                decision_cooldown_seconds=0,
+            )
+            runner = AutomationRunner(config, logger=SessionLogger(session_path))
+
+            runner.process_event(
+                event(
+                    1,
+                    "janq_navigation_login_blocked",
+                    '{"sequence":"Login.LoginErrorSequence","dismissCount":3,'
+                    '"reason":"repeated_login_dialog",'
+                    '"dialogReason":"account_conflict_or_login_error"}',
+                ),
+                now=1.0,
+            )
+
+            rows = [
+                json.loads(line)
+                for line in session_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertFalse(runner.running)
+        self.assertEqual("login_blocked_or_repeated_dialog", rows[-1]["payload"]["reason"])
+        self.assertEqual(
+            "account_conflict_or_login_error",
+            rows[-1]["payload"]["probe_payload"]["dialogReason"],
+        )
+
+    def test_plugin_runner_pauses_on_runtime_login_dialog(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session_path = Path(tmp) / "session.jsonl"
+            config = AutomationConfig(
+                mode="plugin_live",
+                session_log_path=str(session_path),
+                session_dir=tmp,
+                decision_cooldown_seconds=0,
+            )
+            runner = AutomationRunner(config, logger=SessionLogger(session_path))
+
+            runner.process_event(
+                event(
+                    1,
+                    "janq_runtime_login_blocked",
+                    '{"sequence":"Login.LoginErrorSequence",'
+                    '"reason":"account_conflict_or_login_error",'
+                    '"dialogReason":"account_conflict_or_login_error"}',
+                ),
+                now=1.0,
+            )
+
+            rows = [
+                json.loads(line)
+                for line in session_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertFalse(runner.running)
+        self.assertEqual("login_blocked_or_repeated_dialog", rows[-1]["payload"]["reason"])
+        self.assertEqual(
+            "account_conflict_or_login_error",
+            rows[-1]["payload"]["probe_payload"]["dialogReason"],
+        )
+
     def test_reduce_api_events_to_actionable_states(self):
         state = BotGameState()
         state = reduce_event(
@@ -59,6 +288,17 @@ class AutomationTests(unittest.TestCase):
                 2,
                 "recv_game_tsumo",
                 '{"status":"NORMAL","pai":32,"zandan":7,"richi":false,"tehai":[1,2,3,4,5,6,7,8,9,28,29,30,31,32]}',
+            ),
+        )
+        self.assertEqual("wait", state.phase)
+        state = reduce_event(
+            state,
+            event(
+                3,
+                "game_state_snapshot",
+                '{"gameMode":"Normal","state":"UserWait","requestState":"UserWait",'
+                '"mainButtonType":"Shot","mainButtonRequest":"Shot",'
+                '"pais":[0,1,2,3,4,5,6,7,8,27,28,29,30,31]}',
             ),
         )
         self.assertEqual("user_wait", state.phase)
@@ -115,6 +355,109 @@ class AutomationTests(unittest.TestCase):
         self.assertEqual("Bet", state.main_button)
         self.assertEqual("bet_wait", state.phase)
 
+    def test_start_check_interrupt_snapshot_is_not_actionable(self):
+        state = reduce_event(
+            BotGameState(),
+            event(
+                1,
+                "game_state_snapshot",
+                '{"gameMode":"Start","state":"None","requestState":"CheckInterrupt",'
+                '"mainButtonType":"None","mainButtonRequest":"None",'
+                '"pais":[31,31,31,32,32,32,33,33,4,5,6,2,3,14]}',
+            ),
+        )
+
+        self.assertEqual("wait", state.phase)
+
+    def test_retry_snapshot_is_not_actionable_even_with_shot_button(self):
+        state = reduce_event(
+            BotGameState(),
+            event(
+                1,
+                "game_state_snapshot",
+                '{"gameMode":"Normal","state":"RetryRun","requestState":"RetryRun",'
+                '"mainButtonType":"Shot","mainButtonRequest":"Shot",'
+                '"pais":[3,3,3,13,15,16,16,16,17,29,29,29,29,9999]}',
+            ),
+        )
+
+        self.assertEqual("wait", state.phase)
+
+    def test_bet_wait_overrides_unconfirmed_user_wait(self):
+        state = reduce_event(
+            BotGameState(phase="user_wait", hand=tuple(range(14))),
+            event(
+                1,
+                "game_state_snapshot",
+                '{"gameMode":"Normal","state":"BetWait","mainButtonRequest":"Bet",'
+                '"pais":[31,31,31,32,32,32,33,33,4,5,6,2,3,14]}',
+            ),
+        )
+
+        self.assertEqual("bet_wait", state.phase)
+
+    def test_explicit_none_button_clears_stale_agari_during_result_animation(self):
+        state = reduce_event(
+            BotGameState(
+                phase="result",
+                mode="ParenChallenge",
+                status="PARENCHAN",
+                main_button="Agari",
+                hand=tuple(range(14)),
+            ),
+            event(
+                1,
+                "game_state_snapshot",
+                '{"gameMode":"Normal","gameModeNext":"ParenChallenge",'
+                '"state":"AgariRun","requestState":"Result",'
+                '"mainButtonType":"None","mainButtonRequest":"None",'
+                '"pais":[0,1,2,3,4,5,6,7,8,9,10,11,12,13]}',
+            ),
+        )
+
+        self.assertEqual("wait", state.phase)
+        self.assertIsNone(state.main_button)
+
+    def test_replay_tsumo_waits_for_retry_to_finish(self):
+        state = reduce_event(
+            BotGameState(phase="shot_sent", hand=(3, 3, 3, 13, 15, 16, 16, 16, 17, 29, 29, 29, 29)),
+            event(
+                1,
+                "recv_game_tsumo",
+                '{"status":"NORMAL","pai":30,"zandan":3,"richi":false,"replay":true,'
+                '"agari":false,"tehai":[4,4,4,14,16,17,17,17,18,30,30,30,30]}',
+            ),
+        )
+
+        self.assertEqual("wait", state.phase)
+
+        state = reduce_event(
+            state,
+            event(
+                2,
+                "game_state_snapshot",
+                '{"gameMode":"Normal","state":"ShootWait","requestState":"ShootWait",'
+                '"mainButtonType":"None","mainButtonRequest":"Shot",'
+                '"pais":[3,3,3,13,15,16,16,16,17,29,29,29,29,9999]}',
+            ),
+        )
+
+        self.assertEqual("shoot_wait", state.phase)
+
+    def test_policy_waits_on_invalid_transition_hand(self):
+        policy = StrategyPolicy("public")
+        decision = policy.decide(
+            BotGameState(
+                phase="user_wait",
+                mode="Normal",
+                balls=2,
+                hand=(3, 3, 3, 13, 15, 16, 16, 16, 17, 29, 29, 29, 29, 29),
+            )
+        )
+
+        self.assertIsNone(decision.action)
+        self.assertEqual("user_wait_invalid_hand", decision.reason)
+
     def test_snapshot_does_not_reopen_action_after_send(self):
         state = reduce_event(
             BotGameState(phase="shoot_wait"),
@@ -146,19 +489,63 @@ class AutomationTests(unittest.TestCase):
             event(
                 2,
                 "game_state_snapshot",
+                '{"state":"UserWait","mainButtonType":"Shot","pais":[0,1,2,3,4,5,6,7,8,27,28,29,30,31]}',
+            ),
+        )
+        state = reduce_event(
+            state,
+            event(
+                3,
+                "game_state_snapshot",
                 '{"state":"ShootRun","mainButtonType":"Shot","pais":[1,2,3]}',
             ),
         )
 
         self.assertEqual("user_wait", state.phase)
 
-    def test_last_ball_waits_for_automatic_draw_result(self):
+    def test_one_ball_tsumo_waits_for_user_wait_snapshot(self):
         state = reduce_event(
             BotGameState(phase="shot_sent"),
             event(
                 1,
                 "recv_game_tsumo",
                 '{"status":"NORMAL","pai":31,"zandan":1,"agari":false,'
+                '"tehai":[1,2,3,4,5,6,7,8,9,28,29,30,31,32]}',
+            ),
+        )
+
+        self.assertEqual("wait", state.phase)
+
+    def test_one_ball_remaining_still_allows_discard_after_user_wait(self):
+        state = reduce_event(
+            BotGameState(phase="shot_sent"),
+            event(
+                1,
+                "recv_game_tsumo",
+                '{"status":"NORMAL","pai":31,"zandan":1,"agari":false,'
+                '"tehai":[1,2,3,4,5,6,7,8,9,28,29,30,31,32]}',
+            ),
+        )
+        state = reduce_event(
+            state,
+            event(
+                2,
+                "game_state_snapshot",
+                '{"gameMode":"Normal","state":"UserWait","requestState":"UserWait",'
+                '"mainButtonType":"Shot","mainButtonRequest":"Shot",'
+                '"pais":[0,1,2,3,4,5,6,7,8,27,28,29,30,31]}',
+            ),
+        )
+
+        self.assertEqual("user_wait", state.phase)
+
+    def test_no_balls_remaining_waits_for_result(self):
+        state = reduce_event(
+            BotGameState(phase="shot_sent"),
+            event(
+                1,
+                "recv_game_tsumo",
+                '{"status":"NORMAL","pai":31,"zandan":0,"agari":false,'
                 '"tehai":[1,2,3,4,5,6,7,8,9,28,29,30,31,32]}',
             ),
         )
@@ -241,6 +628,96 @@ class AutomationTests(unittest.TestCase):
         self.assertIn("bot_state", types)
         self.assertIn("bot_decision", types)
         self.assertIn("bot_action_done", types)
+
+    def test_runner_allows_same_shot_after_replay_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session_path = Path(tmp) / "session.jsonl"
+            config = AutomationConfig(
+                mode="dry_run",
+                session_log_path=str(session_path),
+                session_dir=tmp,
+                strategy="public",
+                decision_cooldown_seconds=0,
+            )
+            runner = AutomationRunner(config, logger=SessionLogger(session_path))
+            shoot = event(
+                1,
+                "game_state_snapshot",
+                '{"gameMode":"Normal","state":"ShootWait","requestState":"ShootWait",'
+                '"mainButtonRequest":"Shot","balls":2,'
+                '"pais":[0,1,2,3,4,5,6,7,8,9,10,11,12,9999]}',
+            )
+            replay = event(
+                2,
+                "recv_game_tsumo",
+                '{"status":"NORMAL","pai":30,"zandan":2,"richi":false,"replay":true,'
+                '"agari":false,"tehai":[1,2,3,4,5,6,7,8,9,10,11,12,13]}',
+            )
+            retry_ready = event(
+                3,
+                "game_state_snapshot",
+                '{"gameMode":"Normal","state":"ShootWait","requestState":"ShootWait",'
+                '"mainButtonRequest":"Shot","balls":2,'
+                '"pais":[0,1,2,3,4,5,6,7,8,9,10,11,12,9999]}',
+            )
+
+            runner.process_event(shoot, now=1.0)
+            runner.process_event(replay, now=2.0)
+            runner.process_event(retry_ready, now=3.0)
+            rows = [
+                json.loads(line)
+                for line in session_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        decisions = [row for row in rows if row["type"] == "bot_decision"]
+        self.assertEqual(2, len(decisions))
+
+    def test_plugin_runner_pauses_on_shot_confirmation_area_mismatch(self):
+        class FakeExecutor:
+            def execute(self, action, rng=None):
+                del rng
+                return ExecutionResult(True, "plugin_live", action.to_dict(), {})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            session_path = Path(tmp) / "session.jsonl"
+            config = AutomationConfig(
+                mode="plugin_live",
+                session_log_path=str(session_path),
+                session_dir=tmp,
+                strategy="public",
+                decision_cooldown_seconds=0,
+            )
+            runner = AutomationRunner(config, logger=SessionLogger(session_path))
+            runner.executor = FakeExecutor()
+            runner.process_event(
+                event(
+                    1,
+                    "recv_game_haipai",
+                    '{"status":"NORMAL","zandan":8,'
+                    '"haipai":[1,2,3,4,5,6,7,8,9,28,29,30,31]}',
+                ),
+                now=1.0,
+            )
+            self.assertIsNotNone(runner.pending)
+            requested = runner.pending.action.area
+            wrong_area = 5 if requested != 5 else 4
+
+            runner.process_event(
+                event(2, "send_action_shot", '{"area":%d}' % wrong_area),
+                now=2.0,
+            )
+
+            rows = [
+                json.loads(line)
+                for line in session_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertFalse(runner.running)
+        self.assertEqual(
+            "confirmation_payload_mismatch:send_action_shot",
+            rows[-1]["payload"]["reason"],
+        )
+        self.assertIn("shot_area", rows[-1]["payload"]["mismatch"])
 
     def test_plugin_executor_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:

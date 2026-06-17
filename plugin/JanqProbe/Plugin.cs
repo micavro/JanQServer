@@ -228,6 +228,7 @@ internal static class GameManagerProjection
             mainButtonType = FieldText(instance, "mMainButtonType"),
             mainButtonRequest = FieldText(instance, "mMainButtonRequest"),
             mainButtonPushType = FieldText(instance, "mMainButtonPushType"),
+            betRate = FieldInt(instance, "mBets"),
             balls = FieldInt(instance, "mBalls"),
             isReach = FieldBool(instance, "mIsReach"),
             shantenNum = FieldInt(instance, "mShantenNum"),

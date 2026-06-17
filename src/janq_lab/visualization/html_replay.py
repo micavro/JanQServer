@@ -66,6 +66,7 @@ class ReplayTurn:
     riichi_before: bool = False
     riichi_declared: bool = False
     ippatsu_chance: bool = False
+    auto_surrender: bool = False
 
     @property
     def is_agari(self) -> bool:
@@ -94,6 +95,8 @@ class ReplayHand:
     cumulative_payout: int = 0
     cumulative_yakuman_units: int = 0
     hold_hand: bool = False
+    auto_surrender: bool = False
+    auto_surrender_shanten: int | None = None
     bonus_hands: tuple["ReplayHand", ...] = ()
 
     @property
@@ -297,8 +300,8 @@ def simulate_replay(
                 hand,
                 dora_id=dora_id,
                 ura_dora_id=ura_dora_id,
-                reach=riichi_active and riichi_turn != 1,
-                double_reach=riichi_turn == 1,
+                reach=mode == "paren" or (riichi_active and riichi_turn != 1),
+                double_reach=mode != "paren" and riichi_turn == 1,
                 ippatsu=ippatsu_chance,
             )
             replay = ReplayHand(
@@ -335,7 +338,18 @@ def simulate_replay(
 
         if discard_decision.discard_tile is None:
             raise RuntimeError("discard decision did not include a tile")
-        hand = hand.with_removed_one(discard_decision.discard_tile)
+        hand_after_discard_state = hand.with_removed_one(discard_decision.discard_tile)
+        auto_surrender_shanten = _auto_surrender_shanten(
+            discard_decision,
+            hand_after_discard_state,
+        )
+        auto_surrender = (
+            not hold_hand
+            and mode == "normal"
+            and auto_surrender_shanten is not None
+            and current_balls <= auto_surrender_shanten
+        )
+        hand = hand_after_discard_state
         turns.append(
             ReplayTurn(
                 turn=turn_number,
@@ -352,8 +366,39 @@ def simulate_replay(
                 riichi_before=riichi_active,
                 riichi_declared=riichi_declared,
                 ippatsu_chance=ippatsu_chance,
+                auto_surrender=auto_surrender,
             )
         )
+        if auto_surrender:
+            result_riichi = riichi_active or riichi_declared
+            result_riichi_turn = (
+                riichi_turn
+                if riichi_turn is not None
+                else turn_number
+                if riichi_declared
+                else None
+            )
+            return ReplayHand(
+                seed=seed,
+                strategy=strategy,
+                initial_hand=original,
+                turns=tuple(turns),
+                final_hand=hand.to_tiles(),
+                win=False,
+                score=None,
+                dora_id=dora_id,
+                ura_dora_id=ura_dora_id,
+                riichi=result_riichi,
+                riichi_turn=result_riichi_turn,
+                double_riichi=result_riichi_turn == 1,
+                ippatsu_win=False,
+                source_label=source_label,
+                mode=mode,
+                mode_index=mode_index,
+                hold_hand=hold_hand,
+                auto_surrender=True,
+                auto_surrender_shanten=auto_surrender_shanten,
+            )
         if riichi_declared:
             riichi_active = True
             riichi_turn = turn_number
@@ -380,6 +425,15 @@ def simulate_replay(
         mode_index=mode_index,
         hold_hand=hold_hand,
     )
+
+
+def _auto_surrender_shanten(
+    discard: DiscardDecision,
+    hand_after_discard: TileSet,
+) -> int | None:
+    if discard.shanten_after is not None:
+        return discard.shanten_after
+    return shanten(hand_after_discard)
 
 
 def _attach_bonus_hands(
