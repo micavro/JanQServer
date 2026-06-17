@@ -46,11 +46,12 @@ def run_chunk(job: dict[str, Any]) -> dict[str, Any]:
     normal_haipai_source = job["normal_haipai_source"]
     observed_events_path = job["observed_events_path"]
     max_bonus_hands = job["max_bonus_hands"]
+    strategy = job["strategy"]
 
     rng = random.Random(seed)
     tables = load_tables()
     special = load_special_tables()
-    choose_area, choose_discard = _strategy_functions("route_ev")
+    choose_area, choose_discard = _strategy_functions(strategy)
     observed_haipai = None
     if normal_haipai_source == "observed":
         observed_haipai = load_observed_normal_haipai(observed_events_path)
@@ -101,7 +102,7 @@ def run_chunk(job: dict[str, Any]) -> dict[str, Any]:
             ),
             rng=rng,
             bet=bet,
-            strategy="route_ev",
+            strategy=strategy,
             paren_table_mode=paren_table_mode,
             max_bonus_hands=max_bonus_hands,
             base_table=tables["nyukyu_base_table.bytes"],
@@ -198,7 +199,7 @@ def run_chunk(job: dict[str, Any]) -> dict[str, Any]:
         "sessions": sessions,
         "seed": seed,
         "bet": bet,
-        "strategy": "route_ev",
+        "strategy": strategy,
         "paren_table_mode": paren_table_mode,
         "normal_haipai_source": normal_haipai_source,
         "observed_haipai_hands": 0 if observed_haipai is None else len(observed_haipai.hands),
@@ -367,7 +368,7 @@ def aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
         "sessions": sessions,
         "chunks": len(results),
         "sessions_per_chunk": results[0]["sessions"],
-        "strategy": "route_ev",
+        "strategy": results[0]["strategy"],
         "bet": results[0]["bet"],
         "total_bet": total_bet,
         "total_payout": total_payout,
@@ -483,6 +484,7 @@ def main() -> None:
     parser.add_argument("--sessions-per-chunk", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=2026061500)
     parser.add_argument("--bet", type=int, default=10)
+    parser.add_argument("--strategy", choices=("route_ev", "route_ev2"), default="route_ev")
     parser.add_argument("--workers", type=int, default=16)
     parser.add_argument("--paren-table-mode", default="previous_han")
     parser.add_argument("--normal-haipai-source", default="wall")
@@ -504,14 +506,19 @@ def main() -> None:
     jobs = []
     results: list[dict[str, Any]] = []
     for index in range(args.chunks):
-        part_path = args.parts_dir / f"part_{index:03d}.json"
+        prefix = "part" if args.strategy == "route_ev" else f"{args.strategy}_part"
+        part_path = args.parts_dir / f"{prefix}_{index:03d}.json"
         if part_path.exists():
-            results.append(
-                normalize_han_metrics(
-                    json.loads(part_path.read_text(encoding="utf-8"))
-                )
+            existing = normalize_han_metrics(
+                json.loads(part_path.read_text(encoding="utf-8"))
             )
-            continue
+            if existing.get("strategy") == args.strategy:
+                results.append(existing)
+                continue
+            part_path = args.parts_dir / (
+                f"{prefix}_{index:03d}_"
+                f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.json"
+                )
         jobs.append(
             {
                 "index": index,
@@ -519,6 +526,7 @@ def main() -> None:
                 "seed": args.seed + index,
                 "sessions": args.sessions_per_chunk,
                 "bet": args.bet,
+                "strategy": args.strategy,
                 "paren_table_mode": args.paren_table_mode,
                 "normal_haipai_source": args.normal_haipai_source,
                 "observed_events_path": args.observed_events,
@@ -559,6 +567,7 @@ def main() -> None:
             "sessions_per_chunk": args.sessions_per_chunk,
             "seed_start": args.seed,
             "bet": args.bet,
+            "strategy": args.strategy,
             "workers": args.workers,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "paren_table_mode": args.paren_table_mode,

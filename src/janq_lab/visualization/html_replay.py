@@ -43,6 +43,7 @@ from janq_lab.strategy.greedy import (
 from janq_lab.strategy.bonus import choose_bonus_area, choose_bonus_discard
 from janq_lab.strategy.public import choose_public_area, choose_public_discard
 from janq_lab.strategy.route_ev import choose_route_ev_area, choose_route_ev_discard
+from janq_lab.strategy.route_ev2 import choose_route_ev2_area, choose_route_ev2_discard
 from janq_lab.tiles import TILE_COUNT, TILE_NAMES, tile_name
 
 
@@ -961,6 +962,13 @@ def _render_strategy_note(strategy: str) -> str:
             "没有明确役满路线时回到 public 路线。奖励局使用三球听牌专用区域策略，"
             "但手牌 HOLD 锁定，未和牌时只能自动摸切。"
         )
+    elif strategy == "route_ev2":
+        body = (
+            "route_ev2 是实验副本：先沿用 route_ev 的人工复盘护栏，"
+            "再用一层有限步 EV 搜索比较区域和弃牌。搜索会计入第四张返球、"
+            "剩余球数小于等于向听时自动投了；已知宝牌/里宝牌仍由基础 route_ev 估值参与护栏；"
+            "只有收益差距足够大时才覆盖基础策略。奖励局仍按 HOLD 锁定逻辑自动摸切。"
+        )
     elif strategy == "public":
         body = (
             "public 策略：有听牌先打最高和牌概率区；否则优先三元牌或最多花色路线，"
@@ -1442,6 +1450,8 @@ def _strategy_functions(strategy: str) -> tuple[ChooseArea, ChooseDiscard]:
         return choose_public_area, choose_public_discard
     if strategy == "route_ev":
         return choose_route_ev_area, choose_route_ev_discard
+    if strategy == "route_ev2":
+        return choose_route_ev2_area, choose_route_ev2_discard
     raise ValueError(f"unknown strategy: {strategy}")
 
 
@@ -1578,7 +1588,7 @@ def _default_output(seed: int, strategy: str, examples: int) -> Path:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Generate JanQ HTML replay dashboard.")
     parser.add_argument("--seed", type=int, default=1)
-    parser.add_argument("--strategy", choices=("route_ev", "public", "greedy"), default="route_ev")
+    parser.add_argument("--strategy", choices=("route_ev", "route_ev2", "public", "greedy"), default="route_ev")
     parser.add_argument("--examples", type=int, default=100, help="Number of starting hands to show")
     parser.add_argument("--balls", type=int, default=8)
     parser.add_argument("--max-turns", type=int, default=100)

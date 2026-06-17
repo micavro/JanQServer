@@ -14,6 +14,7 @@ from janq_lab.model.simulator import SimulationResult, random_initial_hand, simu
 from janq_lab.strategy.greedy import choose_greedy_area, choose_greedy_discard
 from janq_lab.strategy.public import choose_public_area, choose_public_discard
 from janq_lab.strategy.route_ev import choose_route_ev_area, choose_route_ev_discard
+from janq_lab.strategy.route_ev2 import choose_route_ev2_area, choose_route_ev2_discard
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,9 @@ def run_monte_carlo(
     elif strategy == "route_ev":
         choose_area = choose_route_ev_area
         choose_discard = choose_route_ev_discard
+    elif strategy == "route_ev2":
+        choose_area = choose_route_ev2_area
+        choose_discard = choose_route_ev2_discard
     else:
         raise ValueError(f"unknown strategy: {strategy}")
 
@@ -102,7 +106,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--hands", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--balls", type=int, default=8)
-    parser.add_argument("--strategy", choices=("public", "greedy", "route_ev"), default="public")
+    parser.add_argument("--strategy", choices=("public", "greedy", "route_ev", "route_ev2"), default="public")
     args = parser.parse_args(argv)
 
     summary = run_monte_carlo(

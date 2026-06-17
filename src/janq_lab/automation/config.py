@@ -69,8 +69,8 @@ class AutomationConfig:
     def validate(self) -> None:
         if self.mode not in ("dry_run", "plugin_live", "ui_live"):
             raise ValueError("mode must be dry_run, plugin_live, or ui_live")
-        if self.strategy not in ("public", "greedy", "route_ev"):
-            raise ValueError("strategy must be public, greedy, or route_ev")
+        if self.strategy not in ("public", "greedy", "route_ev", "route_ev2"):
+            raise ValueError("strategy must be public, greedy, route_ev, or route_ev2")
         if self.max_hands < 1:
             raise ValueError("max_hands must be positive")
         if self.max_runtime_seconds <= 0:

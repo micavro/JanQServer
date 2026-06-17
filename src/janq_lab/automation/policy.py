@@ -17,6 +17,7 @@ from janq_lab.strategy.greedy import (
 )
 from janq_lab.strategy.public import choose_public_area, choose_public_discard
 from janq_lab.strategy.route_ev import choose_route_ev_area, choose_route_ev_discard
+from janq_lab.strategy.route_ev2 import choose_route_ev2_area, choose_route_ev2_discard
 
 
 @dataclass(frozen=True)
@@ -169,6 +170,15 @@ class StrategyPolicy:
                 ura_dora_id=state.ura_dora,
                 is_reach=state.is_reach,
             )
+        if self.strategy == "route_ev2":
+            return choose_route_ev2_area(
+                hand,
+                self.normal_table,
+                balls,
+                dora_id=state.dora,
+                ura_dora_id=state.ura_dora,
+                is_reach=state.is_reach,
+            )
         raise ValueError(f"unknown strategy: {self.strategy}")
 
     def _choose_discard(self, state: BotGameState, hand: Any, balls: int) -> DiscardDecision:
@@ -180,6 +190,15 @@ class StrategyPolicy:
             return choose_greedy_discard(hand)
         if self.strategy == "route_ev":
             return choose_route_ev_discard(
+                hand,
+                balls,
+                dora_id=state.dora,
+                ura_dora_id=state.ura_dora,
+                is_reach=state.is_reach,
+                drawn_tile=state.hand[-1] if len(state.hand) == 14 else None,
+            )
+        if self.strategy == "route_ev2":
+            return choose_route_ev2_discard(
                 hand,
                 balls,
                 dora_id=state.dora,

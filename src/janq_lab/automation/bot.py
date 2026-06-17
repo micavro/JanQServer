@@ -479,7 +479,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--mode", choices=("dry_run", "plugin_live", "ui_live"), default=None)
     parser.add_argument("--events-path", default=None)
     parser.add_argument("--session-log-path", default=None)
-    parser.add_argument("--strategy", choices=("public", "greedy", "route_ev"), default=None)
+    parser.add_argument("--strategy", choices=("public", "greedy", "route_ev", "route_ev2"), default=None)
     parser.add_argument("--max-hands", type=int, default=None)
     parser.add_argument("--max-runtime-seconds", type=float, default=None)
     parser.add_argument("--target-mjchip", type=int, default=None)

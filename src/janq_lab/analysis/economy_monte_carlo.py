@@ -21,6 +21,7 @@ from janq_lab.strategy.greedy import choose_greedy_area, choose_greedy_discard
 from janq_lab.strategy.bonus import choose_bonus_area, choose_bonus_discard
 from janq_lab.strategy.public import choose_public_area, choose_public_discard
 from janq_lab.strategy.route_ev import choose_route_ev_area, choose_route_ev_discard
+from janq_lab.strategy.route_ev2 import choose_route_ev2_area, choose_route_ev2_discard
 
 
 YAKUMAN_YAKU_NAMES = frozenset(
@@ -382,7 +383,7 @@ def run_economy_monte_carlo(
             "fourth-copy draws refund one ball, matching the official help",
             "bonus modes use the copied client's paren/yakuman setup tables",
             _paren_table_assumption(paren_table_mode),
-            "route_ev may declare reach in normal mode; reached hands are locked to tsumogiri and first draw after reach can score ippatsu",
+            f"{strategy} may declare reach in normal mode; reached hands are locked to tsumogiri and first draw after reach can score ippatsu",
         ),
     )
 
@@ -592,6 +593,8 @@ def _strategy_functions(strategy: str) -> tuple[Any, Any]:
         return choose_greedy_area, choose_greedy_discard
     if strategy == "route_ev":
         return choose_route_ev_area, choose_route_ev_discard
+    if strategy == "route_ev2":
+        return choose_route_ev2_area, choose_route_ev2_discard
     raise ValueError(f"unknown strategy: {strategy}")
 
 
@@ -721,7 +724,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--sessions", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--bet", type=int, default=10)
-    parser.add_argument("--strategy", choices=("public", "greedy", "route_ev"), default="public")
+    parser.add_argument("--strategy", choices=("public", "greedy", "route_ev", "route_ev2"), default="public")
     parser.add_argument(
         "--paren-table-mode",
         choices=("previous_han", "select_table"),

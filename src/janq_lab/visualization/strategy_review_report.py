@@ -13,6 +13,7 @@ from janq_lab.strategy.review_regressions import (
     StrategyReviewCase,
 )
 from janq_lab.strategy.route_ev import choose_route_ev_area, choose_route_ev_discard
+from janq_lab.strategy.route_ev2 import choose_route_ev2_area, choose_route_ev2_discard
 from janq_lab.visualization.html_replay import (
     TileImageAssets,
     discover_tile_image_assets,
@@ -32,10 +33,15 @@ class StrategyReviewResult:
     target_weight: int = 0
 
 
-def evaluate_strategy_review_case(case: StrategyReviewCase) -> StrategyReviewResult:
+def evaluate_strategy_review_case(
+    case: StrategyReviewCase,
+    *,
+    strategy: str = "route_ev",
+) -> StrategyReviewResult:
+    choose_area, choose_discard = _strategy_functions(strategy)
     if case.kind == "area":
         table = load_tables()["nyukyu_base_table.bytes"]
-        decision = choose_route_ev_area(
+        decision = choose_area(
             case.hand,
             table,
             balls=case.balls,
@@ -53,7 +59,7 @@ def evaluate_strategy_review_case(case: StrategyReviewCase) -> StrategyReviewRes
             target_weight=decision.target_weight,
         )
 
-    decision = choose_route_ev_discard(
+    decision = choose_discard(
         case.hand,
         balls=case.balls,
         dora_id=case.dora_id,
@@ -75,13 +81,16 @@ def evaluate_strategy_review_case(case: StrategyReviewCase) -> StrategyReviewRes
 
 def evaluate_strategy_review_cases(
     cases: tuple[StrategyReviewCase, ...] = REVIEW_REGRESSION_CASES,
+    *,
+    strategy: str = "route_ev",
 ) -> tuple[StrategyReviewResult, ...]:
-    return tuple(evaluate_strategy_review_case(case) for case in cases)
+    return tuple(evaluate_strategy_review_case(case, strategy=strategy) for case in cases)
 
 
 def render_strategy_review_html(
     results: tuple[StrategyReviewResult, ...],
     *,
+    strategy: str = "route_ev",
     resource_dir: str | Path | None = None,
     output_path: str | Path | None = None,
 ) -> str:
@@ -109,7 +118,7 @@ def render_strategy_review_html(
       <div>
         <p class="eyebrow">Independent Decision Regression</p>
         <h1>JanQ 策略回归测试</h1>
-        <p>每个案例只包含决策当时的状态，不依赖完整牌局历史。</p>
+        <p>当前策略：{escape(strategy)}。每个案例只包含决策当时的状态，不依赖完整牌局历史。</p>
       </div>
       <div class="summary">
         <span><b>{len(results)}</b>案例</span>
@@ -133,21 +142,31 @@ def render_strategy_review_html(
 def write_strategy_review_html(
     output: str | Path,
     *,
+    strategy: str = "route_ev",
     resource_dir: str | Path | None = None,
     cases: tuple[StrategyReviewCase, ...] = REVIEW_REGRESSION_CASES,
 ) -> Path:
     path = Path(output)
     path.parent.mkdir(parents=True, exist_ok=True)
-    results = evaluate_strategy_review_cases(cases)
+    results = evaluate_strategy_review_cases(cases, strategy=strategy)
     path.write_text(
         render_strategy_review_html(
             results,
+            strategy=strategy,
             resource_dir=resource_dir,
             output_path=path,
         ),
         encoding="utf-8",
     )
     return path
+
+
+def _strategy_functions(strategy: str):
+    if strategy == "route_ev":
+        return choose_route_ev_area, choose_route_ev_discard
+    if strategy == "route_ev2":
+        return choose_route_ev2_area, choose_route_ev2_discard
+    raise ValueError(f"unknown strategy: {strategy}")
 
 
 def _choice_passes(case: StrategyReviewCase, choice: int | None) -> bool:
@@ -323,11 +342,13 @@ def main(argv: list[str] | None = None) -> None:
         "--output",
         default="JanQ_strategy_regression_tests.html",
     )
+    parser.add_argument("--strategy", choices=("route_ev", "route_ev2"), default="route_ev")
     parser.add_argument("--resource-dir", default="allresourse")
     args = parser.parse_args(argv)
     print(
         write_strategy_review_html(
             args.output,
+            strategy=args.strategy,
             resource_dir=args.resource_dir,
         )
     )
