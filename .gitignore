@@ -9,6 +9,8 @@ JanQcore/
 *.pyc
 *.pyo
 __pycache__/
+.eggs/
+*.egg-info/
 
 .venv/
 venv/
