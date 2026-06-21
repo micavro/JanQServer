@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Reflection;
 using HarmonyLib;
 using UnityEngine;
 
@@ -58,12 +59,25 @@ internal static class LoginDialogMonitor
             ?.GetValue(loginManager);
         while (sequence != null)
         {
-            var inner = AccessTools.Field(sequence.GetType(), "sequence")?.GetValue(sequence);
+            var inner = FieldInHierarchy(sequence.GetType(), "sequence")?.GetValue(sequence);
             if (inner == null || ReferenceEquals(inner, sequence))
             {
                 return sequence;
             }
             sequence = inner;
+        }
+        return null;
+    }
+
+    private static FieldInfo? FieldInHierarchy(Type type, string name)
+    {
+        for (var current = type; current != null; current = current.BaseType)
+        {
+            var field = current.GetField(name, BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+            if (field != null)
+            {
+                return field;
+            }
         }
         return null;
     }

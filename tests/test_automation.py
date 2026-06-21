@@ -3,16 +3,19 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
+from janq_lab.automation.accounts import select_account, update_account_result
 from janq_lab.automation.bankroll import choose_bet_tier, parse_bet_ladder
 from janq_lab.automation.bot import AutomationRunner, ProbeTailer
 from janq_lab.automation.config import AutomationConfig, load_config
 from janq_lab.automation.executor import ExecutionResult, PluginExecutor
 from janq_lab.automation.policy import BotAction, StrategyPolicy
 from janq_lab.automation.session_log import SessionLogger
-from janq_lab.automation.state import BotGameState, reduce_event
+from janq_lab.automation.state import BotGameState, CurrencyState, reduce_event
 from janq_lab.probe.events import parse_event
+from scripts.run_account_batch import classify_status, send_bridge_command, summarize_session
 
 
 def event(line_number, event_type, payload):
@@ -39,6 +42,67 @@ class AutomationTests(unittest.TestCase):
         config = AutomationConfig(mode="plugin_live", enter_janq_on_start=True)
         config.validate()
         self.assertTrue(config.enter_janq_on_start)
+
+    def test_account_store_selects_account_without_exposing_password(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "accounts.json"
+            path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "requestId": "req-a",
+                            "loginId": "mja12345678",
+                            "password": "secret-pass",
+                            "nickname": "JQreqa",
+                            "finalMjchip": 850,
+                            "status": "complete",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            account = select_account(path, "req-a")
+
+        self.assertEqual("req-a", account.request_id)
+        self.assertEqual("mja***", account.masked_login_id)
+        self.assertNotIn("password", account.public_payload())
+
+    def test_account_store_updates_result_without_touching_password(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "accounts.json"
+            path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "requestId": "req-a",
+                            "loginId": "mja12345678",
+                            "password": "secret-pass",
+                            "nickname": "JQreqa",
+                            "finalMjchip": 850,
+                            "status": "complete",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            payload = update_account_result(
+                path,
+                "req-a",
+                current_mjchip=7,
+                status="bankrupt",
+                terminal_reason="bankruptcy_mjchip",
+                session_path="session.jsonl",
+                completed_hands=12,
+            )
+            rows = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual("bankrupt", rows[0]["status"])
+        self.assertEqual(7, rows[0]["currentMjchip"])
+        self.assertEqual(7, rows[0]["finalMjchip"])
+        self.assertEqual("secret-pass", rows[0]["password"])
+        self.assertEqual("mja***", payload["login_id"])
 
     def test_bankroll_policy_uses_200_100_hysteresis(self):
         ladder = parse_bet_ladder("10,20,30,50,100,200")
@@ -584,6 +648,82 @@ class AutomationTests(unittest.TestCase):
 
         self.assertEqual(1, state.completed_hands)
 
+    def test_normal_completed_hands_excludes_bonus_results(self):
+        state = reduce_event(
+            BotGameState(phase="agari_sent"),
+            event(
+                1,
+                "recv_janq_result",
+                '{"status":"NORMAL","mjchip":1000,"nextMode":"ParenChallenge","tehai":[1,2,3]}',
+            ),
+        )
+        state = reduce_event(
+            state,
+            event(
+                2,
+                "recv_game_haipai",
+                '{"status":"PARENCHAN","zandan":3,"haipai":[1,2,3,4,5,6,7,8,9,10,11,12,13]}',
+            ),
+        )
+        state = reduce_event(
+            state,
+            event(
+                3,
+                "recv_janq_result",
+                '{"status":"PARENCHAN","mjchip":1200,"nextMode":"Normal","tehai":[1,2,3]}',
+            ),
+        )
+
+        self.assertEqual(2, state.completed_hands)
+        self.assertEqual(1, state.normal_completed_hands)
+
+    def test_live_parenchan_result_counts_when_previous_mode_was_normal(self):
+        state = reduce_event(
+            BotGameState(phase="shoot_wait"),
+            event(
+                1,
+                "game_state_snapshot",
+                '{"gameMode":"Normal","state":"ShootWait","mainButtonType":"Shot","pais":[1,2,3]}',
+            ),
+        )
+        state = reduce_event(
+            state,
+            event(
+                2,
+                "recv_janq_result",
+                '{"status":"PARENCHAN","mjchip":840,"nextMode":"NONE","tehai":[1,2,3]}',
+            ),
+        )
+
+        self.assertEqual(1, state.completed_hands)
+        self.assertEqual(1, state.normal_completed_hands)
+        self.assertEqual("ParenChallenge", state.mode)
+
+    def test_live_parenchan_result_does_not_count_when_previous_mode_was_bonus(self):
+        state = reduce_event(
+            BotGameState(phase="shoot_wait"),
+            event(
+                1,
+                "game_state_snapshot",
+                (
+                    '{"gameMode":"ParenChallenge","state":"ShootWait",'
+                    '"mainButtonType":"Shot","pais":[1,2,3]}'
+                ),
+            ),
+        )
+        state = reduce_event(
+            state,
+            event(
+                2,
+                "recv_janq_result",
+                '{"status":"PARENCHAN","mjchip":860,"nextMode":"NONE","tehai":[1,2,3]}',
+            ),
+        )
+
+        self.assertEqual(1, state.completed_hands)
+        self.assertEqual(0, state.normal_completed_hands)
+        self.assertEqual("ParenChallenge", state.mode)
+
     def test_runner_stops_immediately_on_draw_result(self):
         with tempfile.TemporaryDirectory() as tmp:
             session_path = Path(tmp) / "session.jsonl"
@@ -599,6 +739,158 @@ class AutomationTests(unittest.TestCase):
 
         self.assertFalse(runner.running)
         self.assertEqual(1, runner.state.completed_hands)
+
+    def test_runner_max_normal_hands_waits_for_bonus_to_finish(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session_path = Path(tmp) / "session.jsonl"
+            config = AutomationConfig(
+                mode="dry_run",
+                session_log_path=str(session_path),
+                session_dir=tmp,
+                max_hands=10,
+                max_normal_hands=1,
+                decision_cooldown_seconds=0,
+            )
+            runner = AutomationRunner(config, logger=SessionLogger(session_path))
+
+            runner.process_event(
+                event(
+                    1,
+                    "recv_janq_result",
+                    '{"status":"NORMAL","mjchip":1000,"nextMode":"ParenChallenge","tehai":[1,2,3]}',
+                ),
+                now=1.0,
+            )
+            self.assertTrue(runner.running)
+            runner.process_event(
+                event(
+                    2,
+                    "recv_game_haipai",
+                    '{"status":"PARENCHAN","zandan":3,"haipai":[1,2,3,4,5,6,7,8,9,10,11,12,13]}',
+                ),
+                now=2.0,
+            )
+            runner.process_event(
+                event(
+                    3,
+                    "recv_janq_result",
+                    '{"status":"PARENCHAN","mjchip":1200,"nextMode":"Normal","tehai":[1,2,3]}',
+                ),
+                now=3.0,
+            )
+            self.assertTrue(runner.running)
+            runner.process_event(
+                event(
+                    4,
+                    "game_state_snapshot",
+                    '{"gameMode":"Normal","state":"BetWait","mainButtonType":"Bet","pais":[1,2,3]}',
+                ),
+                now=4.0,
+            )
+            rows = [
+                json.loads(line)
+                for line in session_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertFalse(runner.running)
+        self.assertEqual("max_normal_hands", rows[-1]["payload"]["reason"])
+
+    def test_runner_stops_at_bankruptcy_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session_path = Path(tmp) / "session.jsonl"
+            config = AutomationConfig(
+                mode="dry_run",
+                session_log_path=str(session_path),
+                session_dir=tmp,
+                bankruptcy_mjchip=9,
+            )
+            runner = AutomationRunner(config, logger=SessionLogger(session_path))
+            runner.state = BotGameState(
+                phase="bet_wait",
+                mode="Normal",
+                currency=CurrencyState(mjchip=9, start_mjchip=335),
+            )
+
+            should_stop = runner._should_stop(now=1.0, start=0.0)
+            rows = [
+                json.loads(line)
+                for line in session_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertTrue(should_stop)
+        self.assertEqual("bankruptcy_mjchip", rows[-1]["payload"]["reason"])
+        self.assertEqual(9, rows[-1]["payload"]["mjchip"])
+
+    def test_runner_waits_for_safe_point_before_bankruptcy_stop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session_path = Path(tmp) / "session.jsonl"
+            config = AutomationConfig(
+                mode="dry_run",
+                session_log_path=str(session_path),
+                session_dir=tmp,
+                bankruptcy_mjchip=9,
+            )
+            runner = AutomationRunner(config, logger=SessionLogger(session_path))
+            runner.state = BotGameState(
+                phase="shoot_wait",
+                mode="Normal",
+                currency=CurrencyState(mjchip=8, start_mjchip=568),
+            )
+
+            should_stop = runner._should_stop(now=1.0, start=0.0)
+            rows = [
+                json.loads(line)
+                for line in session_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertFalse(should_stop)
+        self.assertTrue(runner.running)
+        self.assertEqual("bot_bankroll_terminal_wait", rows[-1]["type"])
+        self.assertEqual("bankruptcy_mjchip", rows[-1]["payload"]["reason"])
+
+    def test_runner_does_not_bet_after_bankruptcy_safe_point(self):
+        class FakeExecutor:
+            def __init__(self):
+                self.actions = []
+
+            def execute(self, action, rng=None):
+                del rng
+                self.actions.append(action)
+                return ExecutionResult(True, "plugin_live", action.to_dict(), {})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            session_path = Path(tmp) / "session.jsonl"
+            config = AutomationConfig(
+                mode="plugin_live",
+                session_log_path=str(session_path),
+                session_dir=tmp,
+                bankruptcy_mjchip=9,
+                decision_cooldown_seconds=0,
+            )
+            runner = AutomationRunner(config, logger=SessionLogger(session_path))
+            fake = FakeExecutor()
+            runner.executor = fake
+            runner.state = BotGameState(
+                currency=CurrencyState(mjchip=8, start_mjchip=568),
+            )
+
+            runner.process_event(
+                event(
+                    1,
+                    "game_state_snapshot",
+                    '{"gameMode":"Normal","state":"BetWait","mainButtonRequest":"Bet",'
+                    '"betRate":10,"pais":[1,2,3]}',
+                ),
+                now=1.0,
+            )
+            rows = [
+                json.loads(line)
+                for line in session_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertFalse(runner.running)
+        self.assertEqual([], fake.actions)
+        self.assertEqual("bankruptcy_mjchip", rows[-1]["payload"]["reason"])
 
     def test_dry_run_runner_logs_decision_and_action(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -764,6 +1056,289 @@ class AutomationTests(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual("plugin_live", result.mode)
         self.assertEqual("shot", result.details["bridge_result"]["kind"])
+
+    def test_plugin_executor_retries_locked_result_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = AutomationConfig(
+                mode="plugin_live",
+                bridge_dir=tmp,
+                action_delay_min_seconds=0,
+                action_delay_max_seconds=0,
+                bridge_result_timeout_seconds=2,
+            )
+            executor = PluginExecutor(config)
+            commands = Path(tmp) / "commands"
+            results = Path(tmp) / "results"
+
+            def fake_plugin():
+                deadline = time.monotonic() + 1
+                command_path = None
+                while time.monotonic() < deadline:
+                    matches = list(commands.glob("*.json")) if commands.exists() else []
+                    if matches:
+                        command_path = matches[0]
+                        break
+                    time.sleep(0.01)
+                self.assertIsNotNone(command_path)
+                command = json.loads(command_path.read_text(encoding="utf-8"))
+                results.mkdir(parents=True, exist_ok=True)
+                (results / f"{command['id']}.json").write_text(
+                    json.dumps(
+                        {
+                            "id": command["id"],
+                            "kind": command["kind"],
+                            "success": True,
+                            "error": None,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            original_read_text = Path.read_text
+            attempts = {"locked": 0}
+
+            def flaky_read_text(path, *args, **kwargs):
+                if path.parent.name == "results" and attempts["locked"] == 0:
+                    attempts["locked"] += 1
+                    raise PermissionError("locked by writer")
+                return original_read_text(path, *args, **kwargs)
+
+            thread = threading.Thread(target=fake_plugin)
+            thread.start()
+            with mock.patch.object(Path, "read_text", flaky_read_text):
+                result = executor.execute(BotAction("shot", area=4))
+            thread.join(timeout=2)
+
+        self.assertTrue(result.success)
+        self.assertEqual(1, attempts["locked"])
+
+    def test_plugin_executor_writes_login_account_command_without_password(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = AutomationConfig(
+                mode="plugin_live",
+                bridge_dir=tmp,
+                action_delay_min_seconds=0,
+                action_delay_max_seconds=0,
+                bridge_result_timeout_seconds=2,
+                login_timeout_seconds=2,
+            )
+            executor = PluginExecutor(config)
+            commands = Path(tmp) / "commands"
+            results = Path(tmp) / "results"
+            captured = {}
+
+            def fake_plugin():
+                deadline = time.monotonic() + 1
+                command_path = None
+                while time.monotonic() < deadline:
+                    matches = list(commands.glob("*.json")) if commands.exists() else []
+                    if matches:
+                        command_path = matches[0]
+                        break
+                    time.sleep(0.01)
+                self.assertIsNotNone(command_path)
+                command = json.loads(command_path.read_text(encoding="utf-8"))
+                captured.update(command)
+                results.mkdir(parents=True, exist_ok=True)
+                (results / f"{command['id']}.json").write_text(
+                    json.dumps(
+                        {
+                            "id": command["id"],
+                            "kind": command["kind"],
+                            "success": True,
+                            "error": None,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            thread = threading.Thread(target=fake_plugin)
+            thread.start()
+            result = executor.execute(
+                BotAction(
+                    "login_account",
+                    account_request_id="req-a",
+                    account_store_path=str(Path(tmp) / "accounts.json"),
+                )
+            )
+            thread.join(timeout=2)
+
+        self.assertTrue(result.success)
+        self.assertEqual("login_account", captured["kind"])
+        self.assertEqual("req-a", captured["accountRequestId"])
+        self.assertNotIn("password", json.dumps(captured).lower())
+
+    def test_account_batch_bridge_command_retries_locked_result_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge = Path(tmp)
+            commands = bridge / "commands"
+            results = bridge / "results"
+
+            def fake_plugin():
+                deadline = time.monotonic() + 1
+                command_path = None
+                while time.monotonic() < deadline:
+                    matches = list(commands.glob("*.json")) if commands.exists() else []
+                    if matches:
+                        command_path = matches[0]
+                        break
+                    time.sleep(0.01)
+                self.assertIsNotNone(command_path)
+                command = json.loads(command_path.read_text(encoding="utf-8"))
+                results.mkdir(parents=True, exist_ok=True)
+                (results / f"{command['id']}.json").write_text(
+                    json.dumps(
+                        {
+                            "id": command["id"],
+                            "kind": command["kind"],
+                            "success": True,
+                            "error": None,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            original_read_text = Path.read_text
+            attempts = {"locked": 0}
+
+            def flaky_read_text(path, *args, **kwargs):
+                if path.parent.name == "results" and attempts["locked"] == 0:
+                    attempts["locked"] += 1
+                    raise PermissionError("locked by writer")
+                return original_read_text(path, *args, **kwargs)
+
+            thread = threading.Thread(target=fake_plugin)
+            thread.start()
+            with mock.patch.object(Path, "read_text", flaky_read_text):
+                result = send_bridge_command(
+                    bridge,
+                    "exit_to_login",
+                    timeout_seconds=2,
+                    poll_seconds=0.01,
+                )
+            thread.join(timeout=2)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(1, attempts["locked"])
+
+    def test_account_batch_summarizes_and_classifies_terminal_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session_path = Path(tmp) / "session.jsonl"
+            session_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "type": "bot_state",
+                                "payload": {
+                                    "phase": "result",
+                                    "completed_hands": 3,
+                                    "currency": {"mjchip": 4000, "start_mjchip": 850},
+                                },
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "type": "bot_pause",
+                                "payload": {"reason": "target_mjchip"},
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "type": "bot_session_summary",
+                                "payload": {
+                                    "state": {
+                                        "phase": "result",
+                                        "completed_hands": 3,
+                                        "currency": {"mjchip": 4000, "start_mjchip": 850},
+                                    }
+                                },
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            summary = summarize_session(session_path)
+            status = classify_status(
+                summary,
+                returncode=0,
+                target_mjchip=4000,
+                bankruptcy_mjchip=9,
+            )
+
+        self.assertEqual(4000, summary["mjchip"])
+        self.assertEqual(3, summary["completedHands"])
+        self.assertTrue(status["terminal"])
+        self.assertEqual("target_reached", status["accountStatus"])
+
+    def test_account_batch_treats_rotation_quota_as_success(self):
+        status = classify_status(
+            {"mjchip": 900, "pauseReason": "max_normal_hands"},
+            returncode=0,
+            target_mjchip=4000,
+            bankruptcy_mjchip=9,
+        )
+
+        self.assertTrue(status["terminal"])
+        self.assertEqual("rotation_quota_reached", status["accountStatus"])
+
+    def test_runner_logs_in_account_before_entering_janq(self):
+        class FakeExecutor:
+            def __init__(self):
+                self.actions = []
+
+            def execute(self, action, rng=None):
+                del rng
+                self.actions.append(action)
+                return ExecutionResult(True, "plugin_live", action.to_dict(), {})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            accounts_path = root / "accounts.json"
+            accounts_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "requestId": "req-a",
+                            "loginId": "mja12345678",
+                            "password": "secret-pass",
+                            "nickname": "JQreqa",
+                            "finalMjchip": 850,
+                            "status": "complete",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            session_path = root / "session.jsonl"
+            config = AutomationConfig(
+                mode="plugin_live",
+                events_path=str(root / "events.jsonl"),
+                bridge_dir=str(root / "bridge"),
+                session_log_path=str(session_path),
+                session_dir=str(root),
+                login_account="req-a",
+                account_store_path=str(accounts_path),
+                enter_janq_on_start=True,
+                max_runtime_seconds=0.01,
+            )
+            runner = AutomationRunner(config, logger=SessionLogger(session_path))
+            fake = FakeExecutor()
+            runner.executor = fake
+
+            runner.run()
+
+            rows = [
+                json.loads(line)
+                for line in session_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual(["login_account", "enter_janq"], [action.kind for action in fake.actions])
+        self.assertEqual("req-a", fake.actions[0].account_request_id)
+        self.assertNotIn("secret-pass", json.dumps(rows))
 
 
 if __name__ == "__main__":

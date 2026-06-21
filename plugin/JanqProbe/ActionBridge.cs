@@ -24,6 +24,14 @@ internal sealed class BridgeCommand
     public int? discardIndex { get; set; }
 
     public bool richi { get; set; }
+
+    public string? account { get; set; }
+
+    public string? accountSelector { get; set; }
+
+    public string? accountRequestId { get; set; }
+
+    public string? accountStorePath { get; set; }
 }
 
 internal sealed class ActiveBridgeCommand
@@ -42,6 +50,10 @@ internal sealed class ActiveBridgeCommand
     public DateTimeOffset StartedAt { get; }
 
     public int Stage { get; set; }
+
+    public object? Context { get; set; }
+
+    public string? LastStatusKey { get; set; }
 }
 
 internal static class ActionBridge
@@ -153,12 +165,12 @@ internal static class ActionBridge
         {
             return false;
         }
-        return DateTimeOffset.UtcNow - created > TimeSpan.FromSeconds(30);
+        return DateTimeOffset.UtcNow - created > TimeSpan.FromSeconds(180);
     }
 
     private static void Process(ActiveBridgeCommand item)
     {
-        if (DateTimeOffset.UtcNow - item.StartedAt > TimeSpan.FromSeconds(15))
+        if (DateTimeOffset.UtcNow - item.StartedAt > TimeoutFor(item))
         {
             Finish(item, success: false, "local_action_timeout", FindGameManager());
             active = null;
@@ -167,6 +179,24 @@ internal static class ActionBridge
 
         try
         {
+            if (item.Command.kind == CasinoExitBridge.Kind)
+            {
+                if (CasinoExitBridge.Process(item, out var success, out var error))
+                {
+                    Finish(item, success, error, FindGameManager());
+                    active = null;
+                }
+                return;
+            }
+            if (item.Command.kind == AccountLoginBridge.Kind)
+            {
+                if (AccountLoginBridge.Process(item, out var success, out var error))
+                {
+                    Finish(item, success, error, FindGameManager());
+                    active = null;
+                }
+                return;
+            }
             if (item.Command.kind == "enter_janq")
             {
                 JanqNavigator.Start();
@@ -213,12 +243,31 @@ internal static class ActionBridge
         }
     }
 
+    private static TimeSpan TimeoutFor(ActiveBridgeCommand item)
+    {
+        return item.Command.kind == AccountLoginBridge.Kind || item.Command.kind == CasinoExitBridge.Kind
+            ? TimeSpan.FromSeconds(180)
+            : TimeSpan.FromSeconds(60);
+    }
+
     private static void PressMain(GameManager manager, ActiveBridgeCommand item, bool allowAgari)
     {
+        var state = CurrentState(manager);
         var button = FieldText(manager, "mMainButtonType");
         var valid = allowAgari ? button == "Agari" : button == "Bet" || button == "Free";
         if (!valid)
         {
+            if (allowAgari && (state == "Result" || state == "AgariRun" || state == "BetWait"))
+            {
+                ProbeLog.Write("bridge_stale_agari_completed", new
+                {
+                    state,
+                    button,
+                    snapshot = GameManagerProjection.Snapshot(manager, "stale_agari")
+                });
+                Finish(item, success: true, null, manager);
+                active = null;
+            }
             return;
         }
         manager.MainButtonClick();
@@ -237,6 +286,18 @@ internal static class ActionBridge
         var button = FieldText(manager, "mMainButtonType");
         if (state != "ShootWait" || button != "Shot")
         {
+            if (state == "UserWait" || state == "BetWait" || state == "FreeWait" || state == "Result" || state == "AgariRun")
+            {
+                ProbeLog.Write("bridge_stale_shot_completed", new
+                {
+                    requestedArea = area,
+                    state,
+                    button,
+                    snapshot = GameManagerProjection.Snapshot(manager, "stale_shot")
+                });
+                Finish(item, success: true, null, manager);
+                active = null;
+            }
             return;
         }
         var shotObject = AccessTools.Field(typeof(GameManager), "mShotObject")?.GetValue(manager) as Image;

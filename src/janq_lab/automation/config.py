@@ -15,17 +15,22 @@ class AutomationConfig:
     mode: str = "dry_run"
     events_path: str = "_runtime/logs/janq_events.jsonl"
     bridge_dir: str = "_runtime/bridge"
-    bridge_result_timeout_seconds: float = 18.0
+    bridge_result_timeout_seconds: float = 190.0
     enter_janq_on_start: bool = False
     bootstrap_existing_events: bool = False
+    login_account: str | None = None
+    account_store_path: str = "_runtime/accounts/accounts.json"
+    login_timeout_seconds: float = 180.0
     session_log_path: str | None = None
     session_dir: str = "_runtime/sessions"
     strategy: str = "route_ev"
     max_hands: int = 100
+    max_normal_hands: int | None = None
     max_runtime_seconds: float = 3600.0
     stop_loss_mjchip: int | None = None
     stop_win_mjchip: int | None = None
     target_mjchip: int | None = None
+    bankruptcy_mjchip: int | None = None
     forced_bet: int | None = None
     bet_ladder: str = "10,20,30,50,100,200"
     bet_up_multiple: float = 200.0
@@ -73,10 +78,14 @@ class AutomationConfig:
             raise ValueError("strategy must be public, greedy, route_ev, or route_ev2")
         if self.max_hands < 1:
             raise ValueError("max_hands must be positive")
+        if self.max_normal_hands is not None and self.max_normal_hands < 1:
+            raise ValueError("max_normal_hands must be positive")
         if self.max_runtime_seconds <= 0:
             raise ValueError("max_runtime_seconds must be positive")
         if self.target_mjchip is not None and self.target_mjchip <= 0:
             raise ValueError("target_mjchip must be positive")
+        if self.bankruptcy_mjchip is not None and self.bankruptcy_mjchip < 0:
+            raise ValueError("bankruptcy_mjchip cannot be negative")
         if self.forced_bet is not None and self.forced_bet <= 0:
             raise ValueError("forced_bet must be positive")
         if self.bet_up_multiple <= 0 or self.bet_down_multiple <= 0:
@@ -92,6 +101,10 @@ class AutomationConfig:
             raise ValueError("confirm_timeout_seconds must be positive")
         if self.bridge_result_timeout_seconds <= 0:
             raise ValueError("bridge_result_timeout_seconds must be positive")
+        if self.login_timeout_seconds <= 0:
+            raise ValueError("login_timeout_seconds must be positive")
+        if self.login_account is not None and not self.login_account.strip():
+            raise ValueError("login_account cannot be empty")
         for area in range(1, 8):
             if self.shot_duration_ms(area) <= 0:
                 raise ValueError(f"shot area {area} duration must be positive")

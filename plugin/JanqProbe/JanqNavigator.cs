@@ -19,7 +19,9 @@ internal static class JanqNavigator
     private static bool betSelected;
     private static bool reselectFromGame;
     private static bool reselectExitRequested;
+    private static bool casinoReturnRequested;
     private static int loginDialogDismissCount;
+    private static float janqDestinationRequestedAt;
     private static float reselectStartedAt;
     private static float nextMenuJumpAt;
     private static float nextStatusLogAt;
@@ -34,7 +36,9 @@ internal static class JanqNavigator
         betSelected = false;
         JanqNavigator.reselectFromGame = reselectFromGame;
         reselectExitRequested = false;
+        casinoReturnRequested = false;
         loginDialogDismissCount = 0;
+        janqDestinationRequestedAt = 0f;
         reselectStartedAt = UnityEngine.Time.realtimeSinceStartup;
         nextMenuJumpAt = 0f;
         nextStatusLogAt = 0f;
@@ -102,7 +106,18 @@ internal static class JanqNavigator
             return;
         }
 
+        RefreshStaleDestinationRequest();
         AdvanceKnownStartupState();
+        if (TryReturnBlockingMenuSubpageToMainMenu())
+        {
+            nextMenuJumpAt = UnityEngine.Time.realtimeSinceStartup + 1f;
+            return;
+        }
+        if (!janqDestinationRequested && TryReturnFromCasinoGameToMenu())
+        {
+            nextMenuJumpAt = UnityEngine.Time.realtimeSinceStartup + 2f;
+            return;
+        }
         if (!janqDestinationRequested)
         {
             MenuSequenceManager.RequestMenuJumpSequence(MenuSequenceManager.MenuJumpSequence.CASINO);
@@ -135,6 +150,7 @@ internal static class JanqNavigator
         if (parent.RequestForceNextSequence(destination))
         {
             janqDestinationRequested = true;
+            janqDestinationRequestedAt = Time.realtimeSinceStartup;
             ProbeLog.Write("janq_navigation_destination_requested", new { });
         }
     }
@@ -376,6 +392,67 @@ internal static class JanqNavigator
         CaptureScreenshot(SceneManager.GetActiveScene().name);
     }
 
+    private static bool TryReturnFromCasinoGameToMenu()
+    {
+        var scene = SceneManager.GetActiveScene().name;
+        if (scene != "BlackJack")
+        {
+            if (scene == "Menu")
+            {
+                casinoReturnRequested = false;
+            }
+            return false;
+        }
+
+        if (casinoReturnRequested)
+        {
+            return true;
+        }
+
+        try
+        {
+            MenuSequenceManager.LastAutholizedGame = MenuSequenceManager.LastPlayAutholizedGameType.CASINO;
+            MenuSequenceManager.DestinationFromCasinoScene = MenuSequenceManager.Destination.CASINO_MENU;
+            SceneManager.LoadScene("Menu");
+            casinoReturnRequested = true;
+            ProbeLog.Write("janq_navigation_casino_return_requested", new { scene });
+        }
+        catch (Exception ex)
+        {
+            ProbeLog.Write("janq_navigation_casino_return_failed", new
+            {
+                scene,
+                error = ex.ToString()
+            });
+        }
+        return true;
+    }
+
+    private static void RefreshStaleDestinationRequest()
+    {
+        if (!janqDestinationRequested)
+        {
+            return;
+        }
+
+        var scene = SceneManager.GetActiveScene().name;
+        var sequence = CurrentInnerSequence(UnityEngine.Object.FindObjectsOfType<MonoBehaviour>()
+            .FirstOrDefault(item => item.GetType().FullName == "MenuSequenceManager"));
+        var sequenceName = sequence?.GetType().FullName;
+        var elapsed = Time.realtimeSinceStartup - janqDestinationRequestedAt;
+        if (scene == "Login" || (scene == "Menu" && sequenceName == "Menu.MainMenu" && elapsed > 8f))
+        {
+            janqDestinationRequested = false;
+            janqDestinationRequestedAt = 0f;
+            ProbeLog.Write("janq_navigation_destination_reset", new
+            {
+                scene,
+                sequence = sequenceName,
+                elapsed
+            });
+        }
+    }
+
     private static void CaptureScreenshot(string scene)
     {
         if (Time.realtimeSinceStartup < nextScreenshotAt)
@@ -395,6 +472,19 @@ internal static class JanqNavigator
 
     private static void AdvanceKnownStartupState()
     {
+        if (TryConfirmDialogButton("Close", "janq_navigation_dialog_confirmed")
+            || TryConfirmDialogButton("OK", "janq_navigation_dialog_confirmed")
+            || TryConfirmDialogButton("BackToTitle", "janq_navigation_dialog_confirmed")
+            || TryConfirmDialogButton("GotoTitle", "janq_navigation_dialog_confirmed"))
+        {
+            return;
+        }
+
+        if (TryAdvanceKnownGlobalDialog())
+        {
+            return;
+        }
+
         var loginManager = UnityEngine.Object.FindObjectsOfType<MonoBehaviour>()
             .FirstOrDefault(item => item.GetType().FullName == "LoginSequenceManager");
         var sequence = CurrentInnerSequence(loginManager);
@@ -433,6 +523,88 @@ internal static class JanqNavigator
         }
         exec.Invoke(onPushAnimEnded, new[] { sequence });
         ProbeLog.Write("janq_navigation_startup_advanced", new { sequence = sequenceName });
+    }
+
+    private static bool TryReturnBlockingMenuSubpageToMainMenu()
+    {
+        var menuManager = UnityEngine.Object.FindObjectsOfType<MonoBehaviour>()
+            .FirstOrDefault(item => item.GetType().FullName == "MenuSequenceManager") as MenuSequenceManager;
+        var sequence = CurrentInnerSequence(menuManager);
+        var sequenceName = sequence?.GetType().FullName;
+        if (menuManager == null || string.IsNullOrWhiteSpace(sequenceName))
+        {
+            return false;
+        }
+        if (!IsBlockingMenuSubpage(sequenceName!))
+        {
+            return false;
+        }
+
+        var destination = CreateMainMenu(menuManager);
+        if (!menuManager.RequestForceNextSequence(destination))
+        {
+            ProbeLog.Write("janq_navigation_menu_subpage_return_waiting", new { sequence = sequenceName });
+            return true;
+        }
+
+        ProbeLog.Write("janq_navigation_menu_subpage_return_requested", new { sequence = sequenceName });
+        return true;
+    }
+
+    private static bool IsBlockingMenuSubpage(string sequenceName)
+    {
+        return sequenceName.Contains("Yakuhime")
+            || sequenceName == "Menu.SubMenu_Yakuhime";
+    }
+
+    private static SequenceBase<MenuSequenceManager> CreateMainMenu(MenuSequenceManager manager)
+    {
+        var type = AccessTools.TypeByName("Menu.MainMenu")
+            ?? throw new MissingMemberException("Menu.MainMenu");
+        var method = type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+            .FirstOrDefault(candidate => candidate.Name == "Create")
+            ?? throw new MissingMethodException(type.FullName, "Create");
+        var parameters = method.GetParameters();
+        var args = new object?[parameters.Length];
+        for (var index = 0; index < parameters.Length; index += 1)
+        {
+            if (index == 0)
+            {
+                args[index] = manager;
+            }
+            else if (parameters[index].ParameterType == typeof(bool))
+            {
+                args[index] = false;
+            }
+            else
+            {
+                args[index] = parameters[index].HasDefaultValue
+                    ? parameters[index].DefaultValue
+                    : null;
+            }
+        }
+        return method.Invoke(null, args) as SequenceBase<MenuSequenceManager>
+            ?? throw new InvalidOperationException("main_menu_create_returned_null");
+    }
+
+    private static bool TryAdvanceKnownGlobalDialog()
+    {
+        foreach (var manager in UnityEngine.Object.FindObjectsOfType<MonoBehaviour>()
+            .Where(item => item.GetType().FullName?.Contains("SequenceManager") == true))
+        {
+            var sequence = CurrentInnerSequence(manager);
+            var sequenceName = sequence?.GetType().FullName;
+            if (TryAdvanceKnownLoginDialog(sequence, sequenceName))
+            {
+                ProbeLog.Write("janq_navigation_global_dialog_advanced", new
+                {
+                    manager = manager.GetType().FullName,
+                    sequence = sequenceName
+                });
+                return true;
+            }
+        }
+        return false;
     }
 
     private static bool TryAdvanceKnownLoginDialog(object? sequence, string? sequenceName)
@@ -507,6 +679,62 @@ internal static class JanqNavigator
             });
             return false;
         }
+    }
+
+    private static bool TryConfirmDialogButton(string requestedButton, string eventType)
+    {
+        var dialogType = AccessTools.TypeByName("MJM.SystemUI.MessageDialog");
+        var instances = dialogType == null
+            ? null
+            : AccessTools.Field(dialogType, "instances")?.GetValue(null) as IList;
+        if (instances == null)
+        {
+            return false;
+        }
+
+        for (var dialogIndex = instances.Count - 1; dialogIndex >= 0; dialogIndex -= 1)
+        {
+            var dialog = instances[dialogIndex];
+            if (dialog == null || Convert.ToBoolean(GetMember(dialog, "disposed")))
+            {
+                continue;
+            }
+            var buttons = FieldValue(dialog, "buttons") as IList;
+            if (buttons == null)
+            {
+                continue;
+            }
+            foreach (var button in buttons.Cast<object>())
+            {
+                var buttonType = GetMember(button, "Type");
+                if (buttonType?.ToString() != requestedButton)
+                {
+                    continue;
+                }
+                InvokeDialogEvent(dialog, "OnPush", buttonType);
+                InvokeDialogEvent(dialog, "OnPushAnimEnded", buttonType);
+                ProbeLog.Write(eventType, new { button = requestedButton });
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void InvokeDialogEvent(object dialog, string fieldName, object buttonType)
+    {
+        var handler = FieldValue(dialog, fieldName);
+        var exec = handler == null ? null : AccessTools.Method(handler.GetType(), "Exec");
+        exec?.Invoke(handler, new[] { buttonType });
+    }
+
+    private static object? GetMember(object instance, string name)
+    {
+        var property = AccessTools.Property(instance.GetType(), name);
+        if (property != null)
+        {
+            return property.GetValue(instance);
+        }
+        return FieldValue(instance, name);
     }
 
     private static object? CurrentInnerSequence(object? manager)

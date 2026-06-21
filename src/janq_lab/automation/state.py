@@ -47,6 +47,7 @@ class BotGameState:
     is_reach: bool = False
     hand_index: int = 0
     completed_hands: int = 0
+    normal_completed_hands: int = 0
     last_line: int = 0
     last_event_type: str | None = None
     currency: CurrencyState = CurrencyState()
@@ -72,6 +73,7 @@ class BotGameState:
             self.is_reach,
             self.hand_index,
             self.completed_hands,
+            self.normal_completed_hands,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -88,6 +90,7 @@ class BotGameState:
             "is_reach": self.is_reach,
             "hand_index": self.hand_index,
             "completed_hands": self.completed_hands,
+            "normal_completed_hands": self.normal_completed_hands,
             "last_line": self.last_line,
             "last_event_type": self.last_event_type,
             "currency": self.currency.__dict__,
@@ -170,8 +173,11 @@ def reduce_event(state: BotGameState, event: ProbeEvent) -> BotGameState:
         normalized = normalize_result_payload(payload)
         currency = _currency_from_payload(payload, previous=state.currency)
         completed_hands = state.completed_hands
+        normal_completed_hands = state.normal_completed_hands
         if state.phase != "result":
             completed_hands += 1
+            if _is_normal_result_from_previous_state(state, payload.get("status")):
+                normal_completed_hands += 1
         return replace(
             state,
             phase="result",
@@ -179,6 +185,7 @@ def reduce_event(state: BotGameState, event: ProbeEvent) -> BotGameState:
             status=_optional_str(payload.get("status")) or state.status,
             hand=normalized["tehai"] or state.hand,
             completed_hands=completed_hands,
+            normal_completed_hands=normal_completed_hands,
             currency=currency,
             last_result=dict(payload),
             **common,
@@ -186,12 +193,16 @@ def reduce_event(state: BotGameState, event: ProbeEvent) -> BotGameState:
 
     if event.type == "send_ryukyoku":
         completed_hands = state.completed_hands
+        normal_completed_hands = state.normal_completed_hands
         if state.phase != "result":
             completed_hands += 1
+            if _is_normal_mode(state.mode, state.status):
+                normal_completed_hands += 1
         return replace(
             state,
             phase="result",
             completed_hands=completed_hands,
+            normal_completed_hands=normal_completed_hands,
             last_result={"type": "ryukyoku", **payload},
             **common,
         )
@@ -314,6 +325,21 @@ def _mode_from_status(value: Any) -> str | None:
         "PARENCHAN": "ParenChallenge",
         "YAKUMAN": "YakumanBonus",
     }.get(status.upper(), status)
+
+
+def _is_normal_result_from_previous_state(state: BotGameState, status_value: Any) -> bool:
+    if state.mode in ("ParenChallenge", "YakumanBonus"):
+        return False
+    if state.mode == "Normal":
+        return True
+    status = _optional_str(status_value)
+    return status is None or status.upper() == "NORMAL"
+
+
+def _is_normal_mode(mode: str | None, status: str | None) -> bool:
+    if isinstance(status, str) and status.upper() in ("PARENCHAN", "YAKUMAN"):
+        return False
+    return mode not in ("ParenChallenge", "YakumanBonus")
 
 
 def _snapshot_hand(value: Any) -> tuple[int, ...]:

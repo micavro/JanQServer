@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -11,6 +11,7 @@ import random
 import time
 from typing import Iterator
 
+from janq_lab.automation.accounts import select_account
 from janq_lab.automation.bankroll import choose_bet_tier, parse_bet_ladder
 from janq_lab.automation.config import AutomationConfig, load_config
 from janq_lab.automation.executor import ExecutionResult, make_executor
@@ -85,6 +86,7 @@ class AutomationRunner:
         self.last_decision_key: tuple[object, ...] | None = None
         self.last_decision_time = 0.0
         self.start_completed_hands = 0
+        self.start_normal_completed_hands = 0
         self.running = True
         self.bet_ladder = parse_bet_ladder(config.bet_ladder)
         initial_bet = config.forced_bet if config.forced_bet is not None else self.bet_ladder[0]
@@ -95,6 +97,7 @@ class AutomationRunner:
         self._last_bridge_target_bet: int | None = None
         self._bet_reselect_requested_at: float | None = None
         self._bet_reselect_target_bet: int | None = None
+        self._last_bankroll_terminal_wait_key: tuple[object, ...] | None = None
 
     def run(self) -> None:
         self.logger.write("bot_session_start", {"config": self.config.__dict__})
@@ -110,15 +113,28 @@ class AutomationRunner:
             for event in tailer.read_new_events():
                 self._track_bet_selection(event)
                 self.state = reduce_event(self.state, event)
+            if self.config.bootstrap_existing_events and self.state.currency.mjchip is not None:
+                self.state = replace(
+                    self.state,
+                    currency=replace(
+                        self.state.currency,
+                        start_mjchip=self.state.currency.mjchip,
+                    ),
+                )
             self.start_completed_hands = self.state.completed_hands
+            self.start_normal_completed_hands = self.state.normal_completed_hands
             self.logger.write("bot_bootstrap_state", self.state.to_dict())
             self._update_bet_target("bootstrap_state")
-        if self.config.mode == "plugin_live" and self.config.enter_janq_on_start:
+        if self.config.mode == "plugin_live" and self.config.login_account:
+            self._run_startup_account_login()
+            self._drain_startup_events(tailer)
+        if self.config.mode == "plugin_live" and self.running and self.config.enter_janq_on_start:
             startup_action = BotAction("enter_janq")
             startup_result = self.executor.execute(startup_action, self.rng)
             self.logger.write("bot_startup_action", startup_result.to_dict())
             if not startup_result.success:
                 self._pause(f"startup_action_failed:{startup_result.error}")
+            self._drain_startup_events(tailer)
         if self.config.mode != "dry_run":
             if self.running:
                 self._maybe_decide(time.monotonic())
@@ -192,7 +208,45 @@ class AutomationRunner:
             self.logger.write("bot_pause", {"reason": "max_hands"})
             self.running = False
             return
+        if self._pause_if_normal_hand_quota_reached():
+            return
+        if self._pause_if_bankruptcy_reached():
+            return
         self._maybe_decide(current_time)
+
+    def _run_startup_account_login(self) -> None:
+        try:
+            account_path = Path(self.config.account_store_path)
+            if not account_path.is_absolute():
+                account_path = Path.cwd() / account_path
+            account = select_account(account_path, self.config.login_account or "")
+        except Exception as exc:
+            self._pause("account_selection_failed", payload={"error": str(exc)})
+            return
+
+        self.logger.write("bot_login_account_selected", account.public_payload())
+        action = BotAction(
+            "login_account",
+            account_request_id=account.request_id,
+            account_store_path=str(account_path),
+        )
+        result = self.executor.execute(action, self.rng)
+        self.logger.write("bot_login_account_action", result.to_dict())
+        if not result.success:
+            self._pause(f"login_account_failed:{result.error}")
+
+    def _drain_startup_events(self, tailer: ProbeTailer) -> None:
+        if not self.running:
+            return
+        changed = False
+        for event in tailer.read_new_events():
+            self._track_bet_selection(event)
+            old_state = self.state
+            self.state = reduce_event(self.state, event)
+            changed = changed or self.state != old_state
+        if changed:
+            self.logger.write("bot_startup_state", self.state.to_dict())
+            self._update_bet_target("startup_events")
 
     def _track_bet_selection(self, event: ProbeEvent) -> None:
         if event.type in ("probe_loaded", "probe_unloaded"):
@@ -275,7 +329,7 @@ class AutomationRunner:
             return
         if self.config.mode != "dry_run":
             expected_event = CONFIRMATION_EVENTS.get(decision.action.kind)
-            if expected_event is not None:
+            if expected_event is not None and not _bridge_result_confirms_action(decision.action, result):
                 self.pending = PendingAction(
                     action=decision.action,
                     expected_event=expected_event,
@@ -313,6 +367,8 @@ class AutomationRunner:
         if self._completed_this_session() >= self.config.max_hands:
             self.logger.write("bot_pause", {"reason": "max_hands"})
             return True
+        if self._pause_if_normal_hand_quota_reached():
+            return True
         if now - start >= self.config.max_runtime_seconds:
             self.logger.write("bot_pause", {"reason": "max_runtime_seconds"})
             return True
@@ -338,10 +394,90 @@ class AutomationRunner:
                 },
             )
             return True
+        if self._pause_if_bankruptcy_reached():
+            return True
         return False
 
     def _completed_this_session(self) -> int:
         return self.state.completed_hands - self.start_completed_hands
+
+    def _normal_completed_this_session(self) -> int:
+        return self.state.normal_completed_hands - self.start_normal_completed_hands
+
+    def _pause_if_normal_hand_quota_reached(self) -> bool:
+        if self.config.max_normal_hands is None:
+            return False
+        normal_hands = self._normal_completed_this_session()
+        if normal_hands < self.config.max_normal_hands:
+            return False
+        if not self._at_normal_safe_stop_point():
+            self.logger.write(
+                "bot_normal_hand_quota_wait",
+                {
+                    "normal_hands": normal_hands,
+                    "max_normal_hands": self.config.max_normal_hands,
+                    "state": self.state.to_dict(),
+                },
+            )
+            return False
+        self.logger.write(
+            "bot_pause",
+            {
+                "reason": "max_normal_hands",
+                "normal_hands": normal_hands,
+                "max_normal_hands": self.config.max_normal_hands,
+                "state": self.state.to_dict(),
+            },
+        )
+        self.running = False
+        return True
+
+    def _pause_if_bankruptcy_reached(self) -> bool:
+        if (
+            self.config.bankruptcy_mjchip is None
+            or self.state.currency.mjchip is None
+            or self.state.currency.mjchip > self.config.bankruptcy_mjchip
+        ):
+            self._last_bankroll_terminal_wait_key = None
+            return False
+
+        payload = {
+            "reason": "bankruptcy_mjchip",
+            "mjchip": self.state.currency.mjchip,
+            "bankruptcy_mjchip": self.config.bankruptcy_mjchip,
+        }
+        if not self._at_normal_safe_stop_point():
+            wait_key = (
+                "bankruptcy_mjchip",
+                self.state.phase,
+                self.state.mode,
+                self.state.status,
+                self.state.currency.mjchip,
+                self.state.completed_hands,
+            )
+            if self._last_bankroll_terminal_wait_key != wait_key:
+                self.logger.write(
+                    "bot_bankroll_terminal_wait",
+                    {**payload, "state": self.state.to_dict()},
+                )
+                self._last_bankroll_terminal_wait_key = wait_key
+            return False
+
+        self._last_bankroll_terminal_wait_key = None
+        self._pause("bankruptcy_mjchip", payload=payload)
+        return True
+
+    def _at_normal_safe_stop_point(self) -> bool:
+        if self.state.mode in ("ParenChallenge", "YakumanBonus"):
+            return False
+        if self.state.mode is None and self.state.status in ("PARENCHAN", "YAKUMAN"):
+            return False
+        next_mode = None
+        if isinstance(self.state.last_result, dict):
+            next_mode = self.state.last_result.get("nextMode")
+        if next_mode in ("ParenChallenge", "YakumanBonus", "PARENCHAN", "YAKUMAN"):
+            return False
+        return self.state.phase in ("bet_wait", "free_wait")
 
     def _pause(self, reason: str, payload: dict[str, object] | None = None) -> None:
         body: dict[str, object] = {"reason": reason, "state": self.state.to_dict()}
@@ -385,6 +521,7 @@ class AutomationRunner:
             "betUpMultiple": self.config.bet_up_multiple,
             "betDownMultiple": self.config.bet_down_multiple,
             "targetMjchip": self.config.target_mjchip,
+            "bankruptcyMjchip": self.config.bankruptcy_mjchip,
             "currentMjchip": self.state.currency.mjchip,
             "policyReason": policy_reason,
             "updatedAt": datetime.now(timezone.utc).isoformat(),
@@ -473,16 +610,37 @@ def _confirmation_payload_mismatch(action: BotAction, event: ProbeEvent) -> str 
     return None
 
 
+def _bridge_result_confirms_action(action: BotAction, result: ExecutionResult) -> bool:
+    if action.kind not in ("shot", "agari"):
+        return False
+    bridge_result = result.details.get("bridge_result") if isinstance(result.details, dict) else None
+    if not isinstance(bridge_result, dict) or bridge_result.get("kind") != action.kind:
+        return False
+    state = bridge_result.get("state")
+    if not isinstance(state, dict):
+        return False
+    if action.kind == "shot":
+        return state.get("state") in ("UserWait", "BetWait", "FreeWait", "Result", "AgariRun")
+    return state.get("state") in ("Result", "AgariRun", "BetWait")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run JanQ automation in dry-run or UI-live mode.")
     parser.add_argument("--config", default=None, help="automation.yaml or JSON config path")
     parser.add_argument("--mode", choices=("dry_run", "plugin_live", "ui_live"), default=None)
     parser.add_argument("--events-path", default=None)
+    parser.add_argument("--bridge-dir", default=None)
     parser.add_argument("--session-log-path", default=None)
+    parser.add_argument("--bootstrap-existing-events", action="store_true", default=None)
+    parser.add_argument("--login-account", default=None)
+    parser.add_argument("--account-store-path", default=None)
+    parser.add_argument("--login-timeout-seconds", type=float, default=None)
     parser.add_argument("--strategy", choices=("public", "greedy", "route_ev", "route_ev2"), default=None)
     parser.add_argument("--max-hands", type=int, default=None)
+    parser.add_argument("--max-normal-hands", type=int, default=None)
     parser.add_argument("--max-runtime-seconds", type=float, default=None)
     parser.add_argument("--target-mjchip", type=int, default=None)
+    parser.add_argument("--bankruptcy-mjchip", type=int, default=None)
     parser.add_argument("--forced-bet", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args(argv)
@@ -491,11 +649,18 @@ def main(argv: list[str] | None = None) -> None:
         args.config,
         mode=args.mode,
         events_path=args.events_path,
+        bridge_dir=args.bridge_dir,
         session_log_path=args.session_log_path,
+        bootstrap_existing_events=args.bootstrap_existing_events,
+        login_account=args.login_account,
+        account_store_path=args.account_store_path,
+        login_timeout_seconds=args.login_timeout_seconds,
         strategy=args.strategy,
         max_hands=args.max_hands,
+        max_normal_hands=args.max_normal_hands,
         max_runtime_seconds=args.max_runtime_seconds,
         target_mjchip=args.target_mjchip,
+        bankruptcy_mjchip=args.bankruptcy_mjchip,
         forced_bet=args.forced_bet,
     )
     runner = AutomationRunner(config, rng=random.Random(args.seed))

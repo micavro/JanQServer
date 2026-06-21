@@ -18,9 +18,11 @@ public sealed class Plugin : BaseUnityPlugin
         ProbeLog.Initialize(Logger);
         UnityEngine.Application.runInBackground = true;
         ActionBridge.Initialize(Paths.GameRootPath);
+        AccountPrepBridge.Initialize(Paths.GameRootPath);
         var harmony = new Harmony("janq.lab.probe");
         harmony.PatchAll(typeof(Plugin).Assembly);
         ActionBridgeRunner.Ensure();
+        AccountPrepRunner.Ensure();
         ProbeLog.Write("probe_loaded", new
         {
             version = "0.2.0",
@@ -395,6 +397,29 @@ internal static class GameManagerMainButtonClickPatch
     private static void Postfix(GameManager __instance)
     {
         GameManagerSnapshotLog.Write(__instance, "main_button_click");
+    }
+}
+
+[HarmonyPatch(typeof(GameManager), "Update")]
+internal static class GameManagerUpdateBridgePatch
+{
+    private static bool ticking;
+
+    private static void Postfix()
+    {
+        if (ticking)
+        {
+            return;
+        }
+        ticking = true;
+        try
+        {
+            ActionBridge.Tick();
+        }
+        finally
+        {
+            ticking = false;
+        }
     }
 }
 

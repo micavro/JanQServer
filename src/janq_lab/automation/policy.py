@@ -27,6 +27,8 @@ class BotAction:
     discard_index: int | None = None
     discard_tile: int | None = None
     richi: bool = False
+    account_request_id: str | None = None
+    account_store_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

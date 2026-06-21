@@ -64,6 +64,8 @@ class PluginExecutor:
             "discardIndex": action.discard_index,
             "discardTile": action.discard_tile,
             "richi": action.richi,
+            "accountRequestId": action.account_request_id,
+            "accountStorePath": action.account_store_path,
         }
         command_path = self.commands_dir / f"{command_id}.json"
         result_path = self.results_dir / f"{command_id}.json"
@@ -79,11 +81,17 @@ class PluginExecutor:
             )
             temp_path.replace(command_path)
 
-            deadline = time.monotonic() + self.config.bridge_result_timeout_seconds
+            timeout = self.config.bridge_result_timeout_seconds
+            if action.kind == "login_account":
+                timeout = max(timeout, self.config.login_timeout_seconds)
+            deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 if result_path.exists():
-                    result = json.loads(result_path.read_text(encoding="utf-8-sig"))
-                    result_path.unlink(missing_ok=True)
+                    result = _read_json_when_ready(result_path, deadline=deadline)
+                    if result is None:
+                        time.sleep(0.05)
+                        continue
+                    _unlink_when_ready(result_path)
                     success = result.get("success") is True
                     return ExecutionResult(
                         success=success,
@@ -92,6 +100,7 @@ class PluginExecutor:
                         details={
                             "command_id": command_id,
                             "delay_s": delay,
+                            "timeout_s": timeout,
                             "bridge_result": result,
                         },
                         error=None if success else str(result.get("error") or "bridge_rejected"),
@@ -101,7 +110,7 @@ class PluginExecutor:
                 success=False,
                 mode="plugin_live",
                 action=action.to_dict(),
-                details={"command_id": command_id, "delay_s": delay},
+                details={"command_id": command_id, "delay_s": delay, "timeout_s": timeout},
                 error="bridge_result_timeout",
             )
         except Exception as exc:
@@ -113,7 +122,7 @@ class PluginExecutor:
                 error=str(exc),
             )
         finally:
-            temp_path.unlink(missing_ok=True)
+            _unlink_when_ready(temp_path)
 
 
 class UiExecutor:
@@ -285,6 +294,39 @@ def _utc_now() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat()
+
+
+def _read_json_when_ready(path: Path, *, deadline: float) -> dict[str, Any] | None:
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8-sig"))
+        except FileNotFoundError:
+            return None
+        except (PermissionError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+            last_error = exc
+            time.sleep(0.05)
+            continue
+        if not isinstance(value, dict):
+            raise ValueError(f"bridge result must be an object: {path}")
+        return value
+    if last_error is not None:
+        raise last_error
+    return None
+
+
+def _unlink_when_ready(path: Path, *, attempts: int = 10) -> bool:
+    for attempt in range(attempts):
+        try:
+            path.unlink(missing_ok=True)
+            return True
+        except FileNotFoundError:
+            return True
+        except (PermissionError, OSError):
+            if attempt + 1 >= attempts:
+                return False
+            time.sleep(0.05)
+    return False
 
 
 def make_executor(config: AutomationConfig) -> DryRunExecutor | PluginExecutor | UiExecutor:

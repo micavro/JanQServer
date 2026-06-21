@@ -1,23 +1,36 @@
+_runtime/
+sega_net_MJ/
+allresourse/
+JanQcore/
+
+*.zip
+*.log
+*.jsonl
+*.pyc
+*.pyo
+*.pyd
 __pycache__/
-*.py[cod]
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.eggs/
+*.egg-info/
+
 .venv/
+venv/
+env/
+
 build/
 dist/
 bin/
 obj/
-*.egg-info/
-_runtime/
-allresourse/
+.vs/
 
-# Local copied game/runtime artifacts
-sega_net_MJ/
 game_statistics.json
-
-# Binary tools and generated assemblies
 *.exe
 *.dll
 *.pdb
-*.zip
+*.user
+*.suo
+*.tmp
+*.working

@@ -4,7 +4,12 @@ param(
     [int]$GameWidth = 1280,
     [int]$GameHeight = 720,
     [int]$TargetMjchip = 1000000,
+    [int]$BankruptcyMjchip = -1,
     [int]$ForcedBet = 0,
+    [string]$LoginAccount = "",
+    [string]$AccountStorePath = "",
+    [int]$LoginTimeoutSeconds = 180,
+    [switch]$BootstrapExistingEvents,
     [switch]$MinimizeGame
 )
 
@@ -43,8 +48,22 @@ $botArgs = @(
     "--max-runtime-seconds", "$MaxRuntimeSeconds",
     "--target-mjchip", "$TargetMjchip"
 )
+if ($BankruptcyMjchip -ge 0) {
+    $botArgs += @("--bankruptcy-mjchip", "$BankruptcyMjchip")
+}
 if ($ForcedBet -gt 0) {
     $botArgs += @("--forced-bet", "$ForcedBet")
+}
+if ($LoginAccount) {
+    if (-not $AccountStorePath) {
+        $AccountStorePath = Join-Path $root "_runtime\accounts\accounts.json"
+    }
+    $botArgs += @("--login-account", "$LoginAccount")
+    $botArgs += @("--account-store-path", "$AccountStorePath")
+    $botArgs += @("--login-timeout-seconds", "$LoginTimeoutSeconds")
+}
+if ($BootstrapExistingEvents) {
+    $botArgs += @("--bootstrap-existing-events")
 }
 
 & python @botArgs
