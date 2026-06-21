@@ -611,7 +611,7 @@ def _confirmation_payload_mismatch(action: BotAction, event: ProbeEvent) -> str 
 
 
 def _bridge_result_confirms_action(action: BotAction, result: ExecutionResult) -> bool:
-    if action.kind not in ("shot", "agari"):
+    if action.kind not in ("shot", "agari", "press_main"):
         return False
     bridge_result = result.details.get("bridge_result") if isinstance(result.details, dict) else None
     if not isinstance(bridge_result, dict) or bridge_result.get("kind") != action.kind:
@@ -621,6 +621,10 @@ def _bridge_result_confirms_action(action: BotAction, result: ExecutionResult) -
         return False
     if action.kind == "shot":
         return state.get("state") in ("UserWait", "BetWait", "FreeWait", "Result", "AgariRun")
+    if action.kind == "press_main":
+        if state.get("mainButtonPushType") in ("Bet", "Free"):
+            return True
+        return state.get("state") not in ("BetWait", "FreeWait")
     return state.get("state") in ("Result", "AgariRun", "BetWait")
 
 

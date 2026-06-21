@@ -11,14 +11,17 @@ param(
     [int]$PrepTimeoutSeconds = 7200,
     [int]$PrepLoadingStallSeconds = 150,
     [int]$PrepGenericStallSeconds = 420,
+    [int]$PrepMaxStories = 0,
     [int]$BotMaxHands = 1000000,
     [int]$BotMaxRuntimeSeconds = 8640000,
+    [int]$ExitTimeoutSeconds = 25,
     [ValidateSet("public", "greedy", "route_ev", "route_ev2")]
     [string]$Strategy = "route_ev",
     [switch]$ShowGame,
     [switch]$HiddenGame,
     [switch]$FreshGame,
     [switch]$FreshPrep,
+    [switch]$NoResumeStopped,
     [switch]$ContinueOnError
 )
 
@@ -64,8 +67,13 @@ $loopArgs = @(
     "--prep-generic-stall-seconds", "$PrepGenericStallSeconds",
     "--bot-max-hands", "$BotMaxHands",
     "--bot-max-runtime-seconds", "$BotMaxRuntimeSeconds",
+    "--exit-timeout-seconds", "$ExitTimeoutSeconds",
     "--strategy", "$Strategy"
 )
+
+if ($PrepMaxStories -gt 0) {
+    $loopArgs += @("--prep-max-stories", "$PrepMaxStories")
+}
 
 if ($ShowGame) {
     $loopArgs += "--show-game"
@@ -78,6 +86,9 @@ if ($FreshGame) {
 }
 if ($FreshPrep) {
     $loopArgs += "--fresh-prep"
+}
+if ($NoResumeStopped) {
+    $loopArgs += "--no-resume-stopped"
 }
 if ($ContinueOnError) {
     $loopArgs += "--continue-on-error"

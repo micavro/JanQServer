@@ -16,6 +16,13 @@ from janq_lab.automation.session_log import SessionLogger
 from janq_lab.automation.state import BotGameState, CurrencyState, reduce_event
 from janq_lab.probe.events import parse_event
 from scripts.run_account_batch import classify_status, send_bridge_command, summarize_session
+from scripts.run_register_janq_loop import (
+    cleanup_bridge_working_files as cleanup_register_bridge_files,
+    exception_text as register_exception_text,
+    mark_account_after_loop_error,
+    send_bridge_command as send_register_bridge_command,
+    should_attempt_exit_to_login,
+)
 
 
 def event(line_number, event_type, payload):
@@ -224,6 +231,57 @@ class AutomationTests(unittest.TestCase):
             )
 
         self.assertTrue(runner.running)
+        self.assertEqual(["press_main"], [action.kind for action in fake.actions])
+
+    def test_plugin_runner_accepts_press_main_bridge_result_confirmation(self):
+        class FakeExecutor:
+            def __init__(self):
+                self.actions = []
+
+            def execute(self, action, rng=None):
+                del rng
+                self.actions.append(action)
+                return ExecutionResult(
+                    True,
+                    "plugin_live",
+                    action.to_dict(),
+                    {
+                        "bridge_result": {
+                            "kind": action.kind,
+                            "state": {
+                                "state": "BetWait",
+                                "mainButtonPushType": "Bet",
+                            },
+                        }
+                    },
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            session_path = Path(tmp) / "session.jsonl"
+            config = AutomationConfig(
+                mode="plugin_live",
+                session_log_path=str(session_path),
+                session_dir=tmp,
+                decision_cooldown_seconds=0,
+            )
+            runner = AutomationRunner(config, logger=SessionLogger(session_path))
+            fake = FakeExecutor()
+            runner.executor = fake
+            runner.target_bet = 10
+
+            runner.process_event(
+                event(
+                    1,
+                    "game_state_snapshot",
+                    '{"gameMode":"Normal","state":"BetWait","requestState":"BetWait",'
+                    '"mainButtonType":"Bet","mainButtonRequest":"Bet","betRate":10,'
+                    '"pais":[1,2,3]}',
+                ),
+                now=1.0,
+            )
+
+        self.assertTrue(runner.running)
+        self.assertIsNone(runner.pending)
         self.assertEqual(["press_main"], [action.kind for action in fake.actions])
 
     def test_plugin_runner_pauses_when_current_target_falls_back(self):
@@ -1284,6 +1342,140 @@ class AutomationTests(unittest.TestCase):
 
         self.assertTrue(status["terminal"])
         self.assertEqual("rotation_quota_reached", status["accountStatus"])
+
+    def test_register_loop_marks_partial_bot_exception_as_resumable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            accounts_path = root / "accounts.json"
+            accounts_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "requestId": "req-a",
+                            "loginId": "mja12345678",
+                            "password": "secret-pass",
+                            "nickname": "Mica02",
+                            "finalMjchip": 850,
+                            "status": "complete",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            session_path = root / "session.jsonl"
+            session_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "type": "bot_state",
+                                "payload": {
+                                    "phase": "shoot_wait",
+                                    "completed_hands": 17,
+                                    "currency": {"mjchip": 370, "start_mjchip": 850},
+                                },
+                            }
+                        )
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            recovery = mark_account_after_loop_error(
+                accounts_path,
+                request_id="req-a",
+                session_path=session_path,
+                exc=RuntimeError(""),
+                target_mjchip=100000,
+                bankruptcy_mjchip=99,
+            )
+            rows = json.loads(accounts_path.read_text(encoding="utf-8"))
+
+        self.assertTrue(recovery["updated"])
+        self.assertTrue(rows[0]["status"].startswith("stopped_"))
+        self.assertEqual(370, rows[0]["currentMjchip"])
+        self.assertEqual(17, rows[0]["lastCompletedHands"])
+        self.assertEqual("loop_exception:RuntimeError", rows[0]["lastTerminalReason"])
+
+    def test_register_loop_attempts_exit_only_from_safe_phase(self):
+        self.assertTrue(should_attempt_exit_to_login({"phase": "bet_wait"}))
+        self.assertTrue(should_attempt_exit_to_login({"phase": "free_wait"}))
+        self.assertFalse(should_attempt_exit_to_login({"phase": "result"}))
+        self.assertFalse(should_attempt_exit_to_login({"phase": "shoot_wait"}))
+        self.assertFalse(should_attempt_exit_to_login({}))
+
+    def test_register_loop_bridge_command_retries_locked_result_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge = Path(tmp)
+            commands = bridge / "commands"
+            results = bridge / "results"
+
+            def fake_plugin():
+                deadline = time.monotonic() + 1
+                command_path = None
+                while time.monotonic() < deadline:
+                    matches = list(commands.glob("*.json")) if commands.exists() else []
+                    if matches:
+                        command_path = matches[0]
+                        break
+                    time.sleep(0.01)
+                self.assertIsNotNone(command_path)
+                command = json.loads(command_path.read_text(encoding="utf-8"))
+                results.mkdir(parents=True, exist_ok=True)
+                (results / f"{command['id']}.json").write_text(
+                    json.dumps(
+                        {
+                            "id": command["id"],
+                            "kind": command["kind"],
+                            "success": True,
+                            "error": None,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            original_read_text = Path.read_text
+            attempts = {"locked": 0}
+
+            def flaky_read_text(path, *args, **kwargs):
+                if path.parent.name == "results" and attempts["locked"] == 0:
+                    attempts["locked"] += 1
+                    raise PermissionError("locked by writer")
+                return original_read_text(path, *args, **kwargs)
+
+            thread = threading.Thread(target=fake_plugin)
+            thread.start()
+            with mock.patch.object(Path, "read_text", flaky_read_text):
+                result = send_register_bridge_command(
+                    "exit_to_login",
+                    bridge_dir=bridge,
+                    timeout_seconds=2,
+                    poll_seconds=0.01,
+                )
+            thread.join(timeout=2)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(1, attempts["locked"])
+
+    def test_register_loop_bridge_cleanup_removes_stale_queue_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge = Path(tmp)
+            commands = bridge / "commands"
+            results = bridge / "results"
+            commands.mkdir(parents=True)
+            results.mkdir(parents=True)
+            for directory in (commands, results):
+                for name in ("a.json", "b.json.working", ".c.tmp"):
+                    (directory / name).write_text("{}", encoding="utf-8")
+
+            cleanup_register_bridge_files(bridge)
+
+        self.assertEqual([], list(commands.glob("*")))
+        self.assertEqual([], list(results.glob("*")))
+
+    def test_register_loop_exception_text_keeps_empty_errors_actionable(self):
+        self.assertEqual("TimeoutError", register_exception_text(TimeoutError()))
 
     def test_runner_logs_in_account_before_entering_janq(self):
         class FakeExecutor:

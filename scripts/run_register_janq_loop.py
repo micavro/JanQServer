@@ -47,6 +47,7 @@ LOADING_STAGES = (
 LOGIN_WAIT_STAGES = (
     "waiting_captured_account_login",
 )
+SAFE_EXIT_PHASES = {"bet_wait", "free_wait"}
 
 
 def main() -> int:
@@ -63,8 +64,10 @@ def main() -> int:
     parser.add_argument("--prep-timeout-seconds", type=float, default=7200.0)
     parser.add_argument("--prep-loading-stall-seconds", type=float, default=150.0)
     parser.add_argument("--prep-generic-stall-seconds", type=float, default=420.0)
+    parser.add_argument("--prep-max-stories", type=int, default=None)
     parser.add_argument("--bot-max-hands", type=int, default=100000)
     parser.add_argument("--bot-max-runtime-seconds", type=float, default=86400.0)
+    parser.add_argument("--exit-timeout-seconds", type=float, default=25.0)
     parser.add_argument("--fresh-game", action="store_true")
     parser.add_argument("--fresh-prep", action="store_true")
     parser.add_argument("--no-resume-stopped", action="store_true")
@@ -81,7 +84,12 @@ def main() -> int:
     start_game(args)
     wait_probe_loaded()
     if args.hidden_game:
-        hide_or_minimize_game_windows(copied_mj_pids(), hide=True)
+        hide_or_minimize_game_windows(
+            copied_mj_pids(),
+            hide=True,
+            width=args.game_width,
+            height=args.game_height,
+        )
 
     try:
         completed = 0
@@ -118,6 +126,7 @@ def main() -> int:
                     "updatedAt": utc_now(),
                 }
             )
+            session_path: Path | None = None
             try:
                 if resumable:
                     prep = {"resumedAccount": public_account_row(resumable)}
@@ -135,10 +144,12 @@ def main() -> int:
                             "updatedAt": utc_now(),
                         }
                     )
+                session_path = session_path_for(iteration, request_id)
                 session_path = run_janq(
                     args,
                     iteration=iteration,
                     request_id=request_id,
+                    session_path=session_path,
                     login_account=request_id if resumable else None,
                 )
                 summary = summarize_session(session_path)
@@ -181,21 +192,41 @@ def main() -> int:
                     continue
                 completed += 1
                 if completed < args.count:
-                    try:
-                        send_bridge_command("exit_to_login", timeout_seconds=90.0)
-                    except TimeoutError as exc:
-                        print(f"[loop] exit_to_login timed out; restarting MJ for next account: {exc}", flush=True)
-                        restart_game(args)
+                    recovery = return_to_login_or_restart(
+                        args,
+                        reason=f"account_finished:{request_id}",
+                        summary=summary,
+                    )
+                    write_loop_status(
+                        {
+                            "state": "ready_for_next_account",
+                            "iteration": iteration,
+                            "count": args.count,
+                            "attempt": attempts,
+                            "requestId": request_id,
+                            "recovery": recovery,
+                            "completed": completed,
+                            "failed": failed,
+                            "updatedAt": utc_now(),
+                        }
+                    )
             except Exception as exc:
                 failed += 1
+                recovery = recover_after_loop_error(
+                    args,
+                    request_id=request_id,
+                    session_path=session_path,
+                    exc=exc,
+                )
                 write_loop_status(
                     {
-                        "state": "failed",
+                        "state": "failed_recovered" if args.continue_on_error else "failed",
                         "iteration": iteration,
                         "count": args.count,
                         "attempt": attempts,
                         "requestId": request_id,
-                        "error": str(exc),
+                        "error": exception_text(exc),
+                        "recovery": recovery,
                         "completed": completed,
                         "failed": failed,
                         "updatedAt": utc_now(),
@@ -250,7 +281,7 @@ def prepare_account(args: argparse.Namespace, *, request_id: str, nickname: str)
     ):
         request_id = str(existing_status["requestId"])
         nickname = str(existing_status.get("nickname") or nickname)
-        atomic_write(PREP_REQUEST, {"id": request_id, "nickname": nickname})
+        atomic_write(PREP_REQUEST, prep_request_payload(args, request_id, nickname))
         existing_status["active"] = True
         existing_status["stage"] = "resume_after_account_capture"
         existing_status["error"] = None
@@ -258,7 +289,7 @@ def prepare_account(args: argparse.Namespace, *, request_id: str, nickname: str)
         atomic_write(PREP_STATUS, existing_status)
         print(f"[loop] reactivated failed account prep checkpoint {request_id}", flush=True)
     else:
-        atomic_write(PREP_REQUEST, {"id": request_id, "nickname": nickname})
+        atomic_write(PREP_REQUEST, prep_request_payload(args, request_id, nickname))
         print(f"[loop] submitted account prep request {request_id}", flush=True)
 
     deadline = time.monotonic() + args.prep_timeout_seconds
@@ -313,9 +344,9 @@ def run_janq(
     *,
     iteration: int,
     request_id: str,
+    session_path: Path,
     login_account: str | None = None,
 ) -> Path:
-    session_path = SESSIONS_DIR / f"loop_{datetime.now():%Y%m%d_%H%M%S}_{iteration:03d}_{sanitize(request_id)}.jsonl"
     command = [
         sys.executable,
         "-m",
@@ -368,10 +399,148 @@ def run_janq(
     return session_path
 
 
+def prep_request_payload(args: argparse.Namespace, request_id: str, nickname: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {"id": request_id, "nickname": nickname}
+    if args.prep_max_stories is not None:
+        payload["maxStories"] = args.prep_max_stories
+    return payload
+
+
+def session_path_for(iteration: int, request_id: str) -> Path:
+    return SESSIONS_DIR / f"loop_{datetime.now():%Y%m%d_%H%M%S}_{iteration:03d}_{sanitize(request_id)}.jsonl"
+
+
+def return_to_login_or_restart(
+    args: argparse.Namespace,
+    *,
+    reason: str,
+    summary: dict[str, Any] | None,
+) -> dict[str, Any]:
+    cleanup_bridge_working_files()
+    if not should_attempt_exit_to_login(summary):
+        restart_game(args)
+        return {
+            "method": "restart_game",
+            "reason": reason,
+            "exitSkipped": "unsafe_or_unknown_phase",
+            "phase": summary.get("phase") if isinstance(summary, dict) else None,
+        }
+
+    try:
+        result = send_bridge_command(
+            "exit_to_login",
+            timeout_seconds=args.exit_timeout_seconds,
+            poll_seconds=0.5,
+        )
+        return {
+            "method": "exit_to_login",
+            "reason": reason,
+            "bridgeResult": public_bridge_result(result),
+        }
+    except Exception as exc:
+        print(
+            f"[loop] exit_to_login failed quickly; restarting MJ for next account: {exception_text(exc)}",
+            flush=True,
+        )
+        cleanup_bridge_working_files()
+        restart_game(args)
+        return {
+            "method": "restart_game",
+            "reason": reason,
+            "exitError": exception_text(exc),
+            "phase": summary.get("phase") if isinstance(summary, dict) else None,
+        }
+
+
+def recover_after_loop_error(
+    args: argparse.Namespace,
+    *,
+    request_id: str,
+    session_path: Path | None,
+    exc: BaseException,
+) -> dict[str, Any]:
+    account_recovery = mark_account_after_loop_error(
+        ACCOUNTS_PATH,
+        request_id=request_id,
+        session_path=session_path,
+        exc=exc,
+        target_mjchip=args.target_mjchip,
+        bankruptcy_mjchip=args.bankruptcy_mjchip,
+    )
+    cleanup_bridge_working_files()
+    restart_game(args)
+    return {
+        "method": "restart_game",
+        "reason": "loop_exception",
+        "error": exception_text(exc),
+        "account": account_recovery,
+    }
+
+
+def mark_account_after_loop_error(
+    accounts_path: Path,
+    *,
+    request_id: str,
+    session_path: Path | None,
+    exc: BaseException,
+    target_mjchip: int,
+    bankruptcy_mjchip: int,
+) -> dict[str, Any]:
+    summary = summarize_session(session_path) if session_path is not None and session_path.exists() else {}
+    terminal = classify_terminal(
+        summary,
+        target_mjchip=target_mjchip,
+        bankruptcy_mjchip=bankruptcy_mjchip,
+    )
+    if terminal["terminal"]:
+        status = terminal["accountStatus"]
+        terminal_reason = terminal["terminalReason"]
+    else:
+        terminal_reason = "loop_exception:" + exception_text(exc)
+        status = "stopped_" + sanitize(terminal_reason)
+
+    try:
+        update = update_account_result(
+            accounts_path,
+            request_id,
+            current_mjchip=summary.get("mjchip"),
+            status=status,
+            terminal_reason=terminal_reason,
+            session_path=str(session_path) if session_path is not None else None,
+            completed_hands=summary.get("completedHands"),
+        )
+    except Exception as update_exc:
+        return {
+            "updated": False,
+            "error": exception_text(update_exc),
+            "status": status,
+            "terminalReason": terminal_reason,
+            "summary": summary,
+        }
+    return {
+        "updated": True,
+        "status": status,
+        "terminalReason": terminal_reason,
+        "summary": summary,
+        "account": update,
+    }
+
+
+def should_attempt_exit_to_login(summary: dict[str, Any] | None) -> bool:
+    if not isinstance(summary, dict):
+        return False
+    return summary.get("phase") in SAFE_EXIT_PHASES
+
+
 def start_game(args: argparse.Namespace) -> None:
-    if copied_mj_pids():
-        if args.hidden_game:
-            hide_or_minimize_game_windows(copied_mj_pids(), hide=True)
+    existing_pids = copied_mj_pids()
+    if existing_pids:
+        hide_or_minimize_game_windows(
+            existing_pids,
+            hide=window_hide_mode(args),
+            width=args.game_width,
+            height=args.game_height,
+        )
         return
     if BEPINEX_LOG.exists():
         try:
@@ -393,24 +562,33 @@ def start_game(args: argparse.Namespace) -> None:
     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     startupinfo.wShowWindow = 0 if args.hidden_game else (1 if args.show_game else 6)
     process = subprocess.Popen(command, cwd=str(GAME_DIR), startupinfo=startupinfo)
-    if args.hidden_game or not args.show_game:
-        hide_or_minimize_game_windows([process.pid], hide=args.hidden_game)
+    hide_or_minimize_game_windows(
+        [process.pid],
+        hide=window_hide_mode(args),
+        width=args.game_width,
+        height=args.game_height,
+    )
 
 
 def restart_game(args: argparse.Namespace) -> None:
+    cleanup_bridge_working_files()
     stop_copied_mj()
     time.sleep(3)
     start_game(args)
     wait_probe_loaded()
-    if args.hidden_game:
-        hide_or_minimize_game_windows(copied_mj_pids(), hide=True)
+    hide_or_minimize_game_windows(
+        copied_mj_pids(),
+        hide=window_hide_mode(args),
+        width=args.game_width,
+        height=args.game_height,
+    )
 
 
-def cleanup_bridge_working_files() -> None:
-    for directory in (BRIDGE_DIR / "commands", BRIDGE_DIR / "results"):
+def cleanup_bridge_working_files(bridge_dir: Path = BRIDGE_DIR) -> None:
+    for directory in (bridge_dir / "commands", bridge_dir / "results"):
         if not directory.exists():
             continue
-        for pattern in ("*.working", "*.tmp"):
+        for pattern in ("*.json", "*.working", "*.tmp", ".*.tmp"):
             for path in directory.glob(pattern):
                 try:
                     path.unlink()
@@ -419,8 +597,9 @@ def cleanup_bridge_working_files() -> None:
 
 
 def stop_copied_mj() -> None:
+    game_path = json.dumps(str(GAME_PATH))
     script = (
-        "$game=(Resolve-Path 'C:\\JanQ\\sega_net_MJ\\MJ\\MJ.exe').Path;"
+        f"$game=[System.IO.Path]::GetFullPath({game_path});"
         "Get-CimInstance Win32_Process | "
         "Where-Object { $_.Name -eq 'MJ.exe' -and [string]::Equals($_.ExecutablePath,$game,[System.StringComparison]::OrdinalIgnoreCase) } | "
         "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
@@ -429,8 +608,9 @@ def stop_copied_mj() -> None:
 
 
 def copied_mj_pids() -> list[int]:
+    game_path = json.dumps(str(GAME_PATH))
     script = (
-        "$game=(Resolve-Path 'C:\\JanQ\\sega_net_MJ\\MJ\\MJ.exe').Path;"
+        f"$game=[System.IO.Path]::GetFullPath({game_path});"
         "Get-CimInstance Win32_Process | "
         "Where-Object { $_.Name -eq 'MJ.exe' -and [string]::Equals($_.ExecutablePath,$game,[System.StringComparison]::OrdinalIgnoreCase) } | "
         "ForEach-Object { $_.ProcessId }"
@@ -450,7 +630,13 @@ def copied_mj_pids() -> list[int]:
     return pids
 
 
-def hide_or_minimize_game_windows(pids: list[int], *, hide: bool) -> None:
+def hide_or_minimize_game_windows(
+    pids: list[int],
+    *,
+    hide: bool | None,
+    width: int = 320,
+    height: int = 180,
+) -> None:
     if not pids:
         return
     try:
@@ -473,8 +659,8 @@ def hide_or_minimize_game_windows(pids: list[int], *, hide: bool) -> None:
             pid = ctypes.c_ulong()
             get_window_thread_process_id(hwnd, ctypes.byref(pid))
             if pid.value in target_pids:
-                move_window(hwnd, 0, 0, 320, 180, True)
-                if is_window_visible(hwnd):
+                move_window(hwnd, 0, 0, max(1, int(width)), max(1, int(height)), True)
+                if hide is not None and is_window_visible(hwnd):
                     show_window(hwnd, SW_HIDE if hide else SW_MINIMIZE)
             return True
 
@@ -484,6 +670,14 @@ def hide_or_minimize_game_windows(pids: list[int], *, hide: bool) -> None:
     while time.monotonic() < deadline:
         apply_once()
         time.sleep(0.5)
+
+
+def window_hide_mode(args: argparse.Namespace) -> bool | None:
+    if args.hidden_game:
+        return True
+    if args.show_game:
+        return None
+    return False
 
 
 def wait_probe_loaded(timeout_seconds: float = 90.0) -> None:
@@ -499,28 +693,72 @@ def wait_probe_loaded(timeout_seconds: float = 90.0) -> None:
     raise TimeoutError("timed out waiting for JanqProbe load marker")
 
 
-def send_bridge_command(kind: str, *, timeout_seconds: float) -> dict[str, Any]:
-    commands_dir = BRIDGE_DIR / "commands"
-    results_dir = BRIDGE_DIR / "results"
+def send_bridge_command(
+    kind: str,
+    *,
+    timeout_seconds: float,
+    bridge_dir: Path = BRIDGE_DIR,
+    poll_seconds: float = 1.0,
+) -> dict[str, Any]:
+    commands_dir = bridge_dir / "commands"
+    results_dir = bridge_dir / "results"
     commands_dir.mkdir(parents=True, exist_ok=True)
     results_dir.mkdir(parents=True, exist_ok=True)
     command_id = uuid.uuid4().hex
     command_path = commands_dir / f"{command_id}.json"
     result_path = results_dir / f"{command_id}.json"
-    atomic_write(command_path, {"id": command_id, "kind": kind, "createdAt": utc_now()})
+    temp_path = commands_dir / f".{command_id}.tmp"
+    temp_path.write_text(
+        json.dumps({"id": command_id, "kind": kind, "createdAt": utc_now()}, ensure_ascii=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    temp_path.replace(command_path)
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        result = read_json(result_path)
-        if result:
-            try:
-                result_path.unlink()
-            except OSError:
-                pass
+        if result_path.exists():
+            result = read_bridge_result_when_ready(result_path, deadline=deadline)
+            if result is None:
+                time.sleep(max(0.05, poll_seconds))
+                continue
+            unlink_when_ready(result_path)
             if result.get("success") is not True:
                 raise RuntimeError(f"{kind} failed: {result.get('error') or 'bridge_rejected'}")
             return result
-        time.sleep(1)
+        time.sleep(max(0.05, poll_seconds))
     raise TimeoutError(f"{kind} timed out after {timeout_seconds}s")
+
+
+def read_bridge_result_when_ready(path: Path, *, deadline: float) -> dict[str, Any] | None:
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8-sig"))
+        except FileNotFoundError:
+            return None
+        except (PermissionError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+            last_error = exc
+            time.sleep(0.05)
+            continue
+        if not isinstance(value, dict):
+            raise ValueError(f"bridge result must be an object: {path}")
+        return value
+    if last_error is not None:
+        raise last_error
+    return None
+
+
+def unlink_when_ready(path: Path, *, attempts: int = 10) -> bool:
+    for attempt in range(attempts):
+        try:
+            path.unlink(missing_ok=True)
+            return True
+        except FileNotFoundError:
+            return True
+        except (PermissionError, OSError):
+            if attempt + 1 >= attempts:
+                return False
+            time.sleep(0.05)
+    return False
 
 
 def summarize_session(path: Path) -> dict[str, Any]:
@@ -608,6 +846,20 @@ def status_summary(status: dict[str, Any]) -> dict[str, Any]:
 def write_loop_status(payload: dict[str, Any]) -> None:
     atomic_write(LOOP_STATUS, payload)
     print(json.dumps({"loop": payload}, ensure_ascii=False), flush=True)
+
+
+def public_bridge_result(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": result.get("id"),
+        "kind": result.get("kind"),
+        "success": result.get("success"),
+        "error": result.get("error"),
+    }
+
+
+def exception_text(exc: BaseException) -> str:
+    text = str(exc).strip()
+    return text or exc.__class__.__name__
 
 
 def archive_prep_state(reason: str) -> None:
