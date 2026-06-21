@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import tempfile
@@ -23,6 +24,7 @@ from scripts.run_account_batch import classify_status, send_bridge_command, summ
 from scripts.run_register_janq_loop import (
     cleanup_bridge_working_files as cleanup_register_bridge_files,
     exception_text as register_exception_text,
+    load_loop_resume_state,
     mark_account_after_loop_error,
     send_bridge_command as send_register_bridge_command,
     should_attempt_exit_to_login,
@@ -1441,6 +1443,47 @@ class AutomationTests(unittest.TestCase):
         self.assertFalse(should_attempt_exit_to_login({"phase": "result"}))
         self.assertFalse(should_attempt_exit_to_login({"phase": "shoot_wait"}))
         self.assertFalse(should_attempt_exit_to_login({}))
+
+    def test_register_loop_resume_state_uses_matching_count_only(self):
+        original_env_workspace = os.environ.get("JANQ_WORKSPACE")
+        original_env_log = os.environ.get("JANQ_PROBE_LOG")
+        original_root = register_loop_script.ROOT
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                register_loop_script.configure_root(root)
+                register_loop_script.LOOP_STATUS.parent.mkdir(parents=True)
+                register_loop_script.LOOP_STATUS.write_text(
+                    json.dumps(
+                        {
+                            "state": "account_finished",
+                            "count": 5,
+                            "iteration": 3,
+                            "failed": 1,
+                            "attempt": 4,
+                            "terminal": {"terminal": True},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                args = argparse.Namespace(count=5)
+
+                resume = load_loop_resume_state(args)
+                args.count = 6
+                ignored = load_loop_resume_state(args)
+
+            self.assertEqual({"completed": 3, "failed": 1, "attempt": 4}, resume)
+            self.assertEqual({}, ignored)
+        finally:
+            register_loop_script.configure_root(original_root)
+            if original_env_workspace is None:
+                os.environ.pop("JANQ_WORKSPACE", None)
+            else:
+                os.environ["JANQ_WORKSPACE"] = original_env_workspace
+            if original_env_log is None:
+                os.environ.pop("JANQ_PROBE_LOG", None)
+            else:
+                os.environ["JANQ_PROBE_LOG"] = original_env_log
 
     def test_register_loop_bridge_command_retries_locked_result_file(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -105,20 +105,18 @@ def main() -> int:
     ensure_runtime()
     if args.fresh_game:
         stop_copied_mj()
-    start_game(args)
-    wait_probe_loaded()
-    if args.hidden_game:
-        hide_or_minimize_game_windows(
-            copied_mj_pids(),
-            hide=True,
-            width=args.game_width,
-            height=args.game_height,
-        )
+    ensure_game_ready(args)
 
     try:
-        completed = 0
-        failed = 0
-        attempts = 0
+        resume_state = load_loop_resume_state(args)
+        completed = int(resume_state.get("completed") or 0)
+        failed = int(resume_state.get("failed") or 0)
+        attempts = int(resume_state.get("attempt") or 0)
+        if completed:
+            print(
+                f"[loop] resuming loop progress: completed={completed}/{args.count}; failed={failed}",
+                flush=True,
+            )
         while completed < args.count:
             attempts += 1
             iteration = completed + 1
@@ -594,18 +592,35 @@ def start_game(args: argparse.Namespace) -> None:
     )
 
 
+def ensure_game_ready(args: argparse.Namespace, *, attempts: int = 4) -> None:
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            start_game(args)
+            wait_probe_loaded()
+            hide_or_minimize_game_windows(
+                copied_mj_pids(),
+                hide=window_hide_mode(args),
+                width=args.game_width,
+                height=args.game_height,
+            )
+            return
+        except Exception as exc:
+            last_error = exc
+            print(
+                f"[loop] MJ startup attempt {attempt}/{attempts} failed: {exception_text(exc)}",
+                flush=True,
+            )
+            stop_copied_mj()
+            time.sleep(min(20.0, 3.0 * attempt))
+    raise RuntimeError(f"MJ startup failed after {attempts} attempts: {exception_text(last_error)}")
+
+
 def restart_game(args: argparse.Namespace) -> None:
     cleanup_bridge_working_files()
     stop_copied_mj()
     time.sleep(3)
-    start_game(args)
-    wait_probe_loaded()
-    hide_or_minimize_game_windows(
-        copied_mj_pids(),
-        hide=window_hide_mode(args),
-        width=args.game_width,
-        height=args.game_height,
-    )
+    ensure_game_ready(args)
 
 
 def cleanup_bridge_working_files(bridge_dir: Path = BRIDGE_DIR) -> None:
@@ -968,6 +983,30 @@ def find_resumable_account(args: argparse.Namespace) -> dict[str, Any] | None:
         return None
     candidates.sort(key=lambda row: str(row.get("lastRunAt") or row.get("createdAt") or ""), reverse=True)
     return candidates[0]
+
+
+def load_loop_resume_state(args: argparse.Namespace) -> dict[str, int]:
+    status = read_json(LOOP_STATUS)
+    if status.get("count") != args.count:
+        return {}
+    state = status.get("state")
+    if state not in {"failed", "failed_recovered", "account_finished", "resuming_account", "preparing_account", "account_prepared"}:
+        return {}
+    completed = status.get("completed")
+    if completed is None and state == "account_finished":
+        terminal = status.get("terminal")
+        iteration = status.get("iteration")
+        if isinstance(terminal, dict) and terminal.get("terminal") is True and isinstance(iteration, int):
+            completed = iteration
+    if not isinstance(completed, int) or completed < 0:
+        return {}
+    failed = status.get("failed")
+    attempt = status.get("attempt")
+    return {
+        "completed": min(completed, args.count),
+        "failed": failed if isinstance(failed, int) and failed >= 0 else 0,
+        "attempt": attempt if isinstance(attempt, int) and attempt >= completed else completed,
+    }
 
 
 def find_active_prep_request() -> dict[str, Any] | None:
