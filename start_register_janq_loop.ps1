@@ -26,8 +26,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$root = $PSScriptRoot
+$root = (Resolve-Path -LiteralPath $PSScriptRoot).Path
 Set-Location $root
+$env:JANQ_WORKSPACE = $root
+$env:JANQ_PROBE_LOG = Join-Path $root "_runtime\logs\janq_events.jsonl"
 
 function Resolve-PythonExe {
     $pythonCandidates = @(
@@ -55,6 +57,7 @@ $env:PYTHONPATH = Join-Path $root "src"
 
 $loopArgs = @(
     (Join-Path $root "scripts\run_register_janq_loop.py"),
+    "--root", "$root",
     "--count", "$Count",
     "--bet", "$Bet",
     "--target-mjchip", "$TargetMjchip",

@@ -14,7 +14,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$root = $PSScriptRoot
+$root = (Resolve-Path -LiteralPath $PSScriptRoot).Path
+$env:JANQ_WORKSPACE = $root
+$env:JANQ_PROBE_LOG = Join-Path $root "_runtime\logs\janq_events.jsonl"
 $gamePath = (Resolve-Path (Join-Path $root "sega_net_MJ\MJ\MJ.exe")).Path
 $gameDirectory = Split-Path -Parent $gamePath
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -13,20 +14,42 @@ import time
 from typing import Any
 import uuid
 
-from janq_lab.automation.accounts import AutomationAccount, load_accounts, update_account_result
+def _default_root() -> Path:
+    env_root = os.environ.get("JANQ_WORKSPACE")
+    if env_root and env_root.strip():
+        return Path(env_root).expanduser().resolve()
+    return Path(__file__).resolve().parents[1]
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = _default_root()
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from janq_lab.automation.accounts import AutomationAccount, load_accounts, update_account_result  # noqa: E402
+
+
+def configure_root(root: str | Path | None = None, *, update_environment: bool = True) -> Path:
+    global ROOT, SRC
+
+    ROOT = (Path(root).expanduser() if root is not None else _default_root()).resolve()
+    SRC = ROOT / "src"
+    if str(SRC) not in sys.path:
+        sys.path.insert(0, str(SRC))
+    if update_environment:
+        os.environ["JANQ_WORKSPACE"] = str(ROOT)
+    return ROOT
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--accounts-path", default=str(ROOT / "_runtime" / "accounts" / "accounts.json"))
-    parser.add_argument("--config", default=str(ROOT / "automation.example.yaml"))
-    parser.add_argument("--events-path", default=str(ROOT / "_runtime" / "logs" / "janq_events.jsonl"))
-    parser.add_argument("--bridge-dir", default=str(ROOT / "_runtime" / "bridge"))
-    parser.add_argument("--sessions-dir", default=str(ROOT / "_runtime" / "sessions"))
-    parser.add_argument("--status-path", default=str(ROOT / "_runtime" / "batch" / "account_batch_status.json"))
+    parser.add_argument("--root", default=None, help="JanQ workspace root; defaults to this script's repository.")
+    parser.add_argument("--accounts-path", default=None)
+    parser.add_argument("--config", default=None)
+    parser.add_argument("--events-path", default=None)
+    parser.add_argument("--bridge-dir", default=None)
+    parser.add_argument("--sessions-dir", default=None)
+    parser.add_argument("--status-path", default=None)
     parser.add_argument("--target-mjchip", type=int, default=4000)
     parser.add_argument("--bankruptcy-mjchip", type=int, default=9)
     parser.add_argument("--forced-bet", type=int, default=10)
@@ -41,6 +64,14 @@ def main() -> int:
     parser.add_argument("--continue-on-error", action="store_true")
     parser.add_argument("--limit-accounts", type=int, default=None)
     args = parser.parse_args()
+    configure_root(args.root)
+    args.accounts_path = args.accounts_path or str(ROOT / "_runtime" / "accounts" / "accounts.json")
+    args.config = args.config or str(ROOT / "automation.example.yaml")
+    args.events_path = args.events_path or str(ROOT / "_runtime" / "logs" / "janq_events.jsonl")
+    args.bridge_dir = args.bridge_dir or str(ROOT / "_runtime" / "bridge")
+    args.sessions_dir = args.sessions_dir or str(ROOT / "_runtime" / "sessions")
+    args.status_path = args.status_path or str(ROOT / "_runtime" / "batch" / "account_batch_status.json")
+    os.environ["JANQ_PROBE_LOG"] = str(Path(args.events_path).resolve())
 
     accounts_path = Path(args.accounts_path).resolve()
     bridge_dir = Path(args.bridge_dir).resolve()
@@ -462,12 +493,11 @@ def utc_now() -> str:
 
 
 def os_environ_with_pythonpath() -> dict[str, str]:
-    import os
-
     env = dict(os.environ)
     src = str(ROOT / "src")
     existing = env.get("PYTHONPATH")
     env["PYTHONPATH"] = src if not existing else src + os.pathsep + existing
+    env["JANQ_WORKSPACE"] = str(ROOT)
     return env
 
 

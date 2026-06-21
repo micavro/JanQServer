@@ -67,9 +67,9 @@ internal static class ActionBridge
 
     public static string RootPath { get; private set; } = "";
 
-    public static void Initialize(string gameRoot)
+    public static void Initialize(string workspace)
     {
-        var workspace = Path.GetFullPath(Path.Combine(gameRoot, "..", ".."));
+        workspace = Path.GetFullPath(workspace);
         RootPath = Path.Combine(workspace, "_runtime", "bridge");
         commandsPath = Path.Combine(RootPath, "commands");
         resultsPath = Path.Combine(RootPath, "results");

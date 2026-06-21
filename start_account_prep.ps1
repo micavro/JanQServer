@@ -16,8 +16,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$root = $PSScriptRoot
+$root = (Resolve-Path -LiteralPath $PSScriptRoot).Path
 Set-Location $root
+$env:JANQ_WORKSPACE = $root
+$env:JANQ_PROBE_LOG = Join-Path $root "_runtime\logs\janq_events.jsonl"
 
 $gamePath = (Resolve-Path (Join-Path $root "sega_net_MJ\MJ\MJ.exe")).Path
 $gameDirectory = Split-Path -Parent $gamePath
@@ -241,6 +243,7 @@ function Run-OneAccountPrep {
 
     $prepArgs = @(
         (Join-Path $root "scripts\run_account_prep.py"),
+        "--root", "$root",
         "--timeout-seconds", "$TimeoutSeconds"
     )
     if ($MaxStories -gt 0) {

@@ -15,10 +15,11 @@ public sealed class Plugin : BaseUnityPlugin
 {
     private void Awake()
     {
+        ProbePaths.Initialize(Paths.GameRootPath);
         ProbeLog.Initialize(Logger);
         UnityEngine.Application.runInBackground = true;
-        ActionBridge.Initialize(Paths.GameRootPath);
-        AccountPrepBridge.Initialize(Paths.GameRootPath);
+        ActionBridge.Initialize(ProbePaths.WorkspaceRoot);
+        AccountPrepBridge.Initialize(ProbePaths.WorkspaceRoot);
         var harmony = new Harmony("janq.lab.probe");
         harmony.PatchAll(typeof(Plugin).Assembly);
         ActionBridgeRunner.Ensure();
@@ -26,6 +27,7 @@ public sealed class Plugin : BaseUnityPlugin
         ProbeLog.Write("probe_loaded", new
         {
             version = "0.2.0",
+            workspace = ProbePaths.WorkspaceRoot,
             gameRoot = Paths.GameRootPath,
             logPath = ProbeLog.LogPath,
             bridgeRoot = ActionBridge.RootPath,
@@ -37,6 +39,26 @@ public sealed class Plugin : BaseUnityPlugin
     private void OnDestroy()
     {
         ProbeLog.Write("plugin_host_destroyed", new { bridgeContinues = true });
+    }
+}
+
+internal static class ProbePaths
+{
+    public static string WorkspaceRoot { get; private set; } = "";
+
+    public static void Initialize(string gameRoot)
+    {
+        WorkspaceRoot = ResolveWorkspaceRoot(gameRoot);
+    }
+
+    public static string ResolveWorkspaceRoot(string gameRoot)
+    {
+        var env = Environment.GetEnvironmentVariable("JANQ_WORKSPACE");
+        if (!string.IsNullOrWhiteSpace(env))
+        {
+            return Path.GetFullPath(env);
+        }
+        return Path.GetFullPath(Path.Combine(gameRoot, "..", ".."));
     }
 }
 
@@ -84,7 +106,9 @@ internal static class ProbeLog
             return Path.GetFullPath(env);
         }
 
-        var workspace = Path.GetFullPath(Path.Combine(Paths.GameRootPath, "..", ".."));
+        var workspace = string.IsNullOrWhiteSpace(ProbePaths.WorkspaceRoot)
+            ? ProbePaths.ResolveWorkspaceRoot(Paths.GameRootPath)
+            : ProbePaths.WorkspaceRoot;
         return Path.Combine(workspace, "_runtime", "logs", "janq_events.jsonl");
     }
 }

@@ -5,7 +5,7 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
-$Root = Split-Path -Parent $PSScriptRoot
+$Root = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).Path
 $Runtime = Join-Path $Root "_runtime"
 $LoopDir = Join-Path $Runtime "register_janq_loop"
 $WatchdogDir = Join-Path $Runtime "watchdog"
@@ -33,10 +33,18 @@ function Read-JsonFile($Path) {
     return $null
 }
 
+function Test-CommandLineInWorkspace($CommandLine) {
+    if ([string]::IsNullOrWhiteSpace($CommandLine)) {
+        return $false
+    }
+    $workspacePattern = [regex]::Escape($Root.TrimEnd('\')) + '(\\|"|\s|$)'
+    return $CommandLine -match $workspacePattern
+}
+
 function Get-JanQLoopProcesses {
     Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" |
         Where-Object {
-            $_.CommandLine -like "*$Root*" -and
+            (Test-CommandLineInWorkspace $_.CommandLine) -and
             $_.CommandLine -like "*run_register_janq_loop.py*" -and
             ($_.CommandLine -match "(--count\s+$Count|\s-n\s+$Count)")
         }
@@ -45,7 +53,7 @@ function Get-JanQLoopProcesses {
 function Get-JanQBotProcesses {
     Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" |
         Where-Object {
-            $_.CommandLine -like "*$Root*" -and
+            (Test-CommandLineInWorkspace $_.CommandLine) -and
             $_.CommandLine -like "*janq_lab.automation.bot*"
         }
 }
