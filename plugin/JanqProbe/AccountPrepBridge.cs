@@ -20,6 +20,8 @@ internal sealed class AccountPrepRequest
     public string? id { get; set; }
 
     public string? nickname { get; set; }
+
+    public int? maxStories { get; set; }
 }
 
 internal sealed class AccountPrepStatus
@@ -45,6 +47,8 @@ internal sealed class AccountPrepStatus
     public int? currentMjchip { get; set; }
 
     public List<int> completedStories { get; set; } = new();
+
+    public int? maxStories { get; set; }
 
     public List<int> exhaustedChapters { get; set; } = new();
 
@@ -795,6 +799,12 @@ internal static class AccountPrepBridge
 
     private static void ProcessQuestList(object sequence)
     {
+        if (ReachedStoryLimit())
+        {
+            Complete();
+            return;
+        }
+
         var window = FieldValue(sequence, "yakuhimeQuestListWindow");
         var chapters = window == null ? null : FieldValue(window, "chapterList") as IList;
         if (chapters == null)
@@ -869,6 +879,11 @@ internal static class AccountPrepBridge
                 });
                 lastStoryId = 0;
                 skipIssued = false;
+                if (ReachedStoryLimit())
+                {
+                    Complete();
+                    return;
+                }
             }
             else
             {
@@ -1042,11 +1057,17 @@ internal static class AccountPrepBridge
         {
             requestId = request?.id,
             completedStories = CompletedStories.OrderBy(id => id).ToArray(),
+            maxStories = request?.maxStories,
             exhaustedChapters = ExhaustedChapters.OrderBy(id => id).ToArray(),
             inaccessibleChapters = InaccessibleChapters.OrderBy(id => id).ToArray(),
             mjchip = currentMjchip
         });
         ArchiveRequest("done");
+    }
+
+    private static bool ReachedStoryLimit()
+    {
+        return request?.maxStories is > 0 && CompletedStories.Count >= request.maxStories.Value;
     }
 
     private static void Fail(string reason, string? detail)
@@ -1136,6 +1157,7 @@ internal static class AccountPrepBridge
             initialMjchip = initialMjchip,
             currentMjchip = currentMjchip,
             completedStories = CompletedStories.OrderBy(id => id).ToList(),
+            maxStories = request?.maxStories,
             exhaustedChapters = ExhaustedChapters.OrderBy(id => id).ToList(),
             currentChapterId = currentChapterId == 0 ? null : currentChapterId,
             inaccessibleChapters = InaccessibleChapters.Distinct().OrderBy(id => id).ToList(),

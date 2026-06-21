@@ -3,6 +3,7 @@ param(
     [ValidateRange(1, 100)]
     [int]$Count = 1,
     [int]$TimeoutSeconds = 7200,
+    [int]$MaxStories = 0,
     [int]$GameWidth = 1600,
     [int]$GameHeight = 900,
     [string]$Nickname = "",
@@ -242,6 +243,9 @@ function Run-OneAccountPrep {
         (Join-Path $root "scripts\run_account_prep.py"),
         "--timeout-seconds", "$TimeoutSeconds"
     )
+    if ($MaxStories -gt 0) {
+        $prepArgs += @("--max-stories", "$MaxStories")
+    }
     $runNickname = Resolve-RunNickname $Iteration
     if (-not [string]::IsNullOrWhiteSpace($runNickname)) {
         $prepArgs += @("--nickname", $runNickname)

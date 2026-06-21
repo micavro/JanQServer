@@ -97,6 +97,7 @@ class AutomationRunner:
         self._last_bridge_target_bet: int | None = None
         self._bet_reselect_requested_at: float | None = None
         self._bet_reselect_target_bet: int | None = None
+        self._last_bankroll_terminal_wait_key: tuple[object, ...] | None = None
 
     def run(self) -> None:
         self.logger.write("bot_session_start", {"config": self.config.__dict__})
@@ -208,6 +209,8 @@ class AutomationRunner:
             self.running = False
             return
         if self._pause_if_normal_hand_quota_reached():
+            return
+        if self._pause_if_bankruptcy_reached():
             return
         self._maybe_decide(current_time)
 
@@ -391,19 +394,7 @@ class AutomationRunner:
                 },
             )
             return True
-        if (
-            self.config.bankruptcy_mjchip is not None
-            and self.state.currency.mjchip is not None
-            and self.state.currency.mjchip <= self.config.bankruptcy_mjchip
-        ):
-            self.logger.write(
-                "bot_pause",
-                {
-                    "reason": "bankruptcy_mjchip",
-                    "mjchip": self.state.currency.mjchip,
-                    "bankruptcy_mjchip": self.config.bankruptcy_mjchip,
-                },
-            )
+        if self._pause_if_bankruptcy_reached():
             return True
         return False
 
@@ -439,6 +430,41 @@ class AutomationRunner:
             },
         )
         self.running = False
+        return True
+
+    def _pause_if_bankruptcy_reached(self) -> bool:
+        if (
+            self.config.bankruptcy_mjchip is None
+            or self.state.currency.mjchip is None
+            or self.state.currency.mjchip > self.config.bankruptcy_mjchip
+        ):
+            self._last_bankroll_terminal_wait_key = None
+            return False
+
+        payload = {
+            "reason": "bankruptcy_mjchip",
+            "mjchip": self.state.currency.mjchip,
+            "bankruptcy_mjchip": self.config.bankruptcy_mjchip,
+        }
+        if not self._at_normal_safe_stop_point():
+            wait_key = (
+                "bankruptcy_mjchip",
+                self.state.phase,
+                self.state.mode,
+                self.state.status,
+                self.state.currency.mjchip,
+                self.state.completed_hands,
+            )
+            if self._last_bankroll_terminal_wait_key != wait_key:
+                self.logger.write(
+                    "bot_bankroll_terminal_wait",
+                    {**payload, "state": self.state.to_dict()},
+                )
+                self._last_bankroll_terminal_wait_key = wait_key
+            return False
+
+        self._last_bankroll_terminal_wait_key = None
+        self._pause("bankruptcy_mjchip", payload=payload)
         return True
 
     def _at_normal_safe_stop_point(self) -> bool:
@@ -585,7 +611,7 @@ def _confirmation_payload_mismatch(action: BotAction, event: ProbeEvent) -> str 
 
 
 def _bridge_result_confirms_action(action: BotAction, result: ExecutionResult) -> bool:
-    if action.kind not in ("shot", "agari"):
+    if action.kind not in ("shot", "agari", "press_main"):
         return False
     bridge_result = result.details.get("bridge_result") if isinstance(result.details, dict) else None
     if not isinstance(bridge_result, dict) or bridge_result.get("kind") != action.kind:
@@ -595,6 +621,10 @@ def _bridge_result_confirms_action(action: BotAction, result: ExecutionResult) -
         return False
     if action.kind == "shot":
         return state.get("state") in ("UserWait", "BetWait", "FreeWait", "Result", "AgariRun")
+    if action.kind == "press_main":
+        if state.get("mainButtonPushType") in ("Bet", "Free"):
+            return True
+        return state.get("state") not in ("BetWait", "FreeWait")
     return state.get("state") in ("Result", "AgariRun", "BetWait")
 
 

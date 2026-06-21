@@ -43,6 +43,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--nickname")
     parser.add_argument("--request-id")
+    parser.add_argument("--max-stories", type=int, default=None)
     parser.add_argument("--timeout-seconds", type=int, default=7200)
     args = parser.parse_args()
 
@@ -54,7 +55,7 @@ def main() -> int:
         request_id = args.request_id or uuid.uuid4().hex
         _atomic_write(
             REQUEST_PATH,
-            {"id": request_id, "nickname": args.nickname},
+            {"id": request_id, "nickname": args.nickname, "maxStories": args.max_stories},
         )
 
     deadline = time.monotonic() + args.timeout_seconds
