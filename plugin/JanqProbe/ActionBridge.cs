@@ -257,6 +257,18 @@ internal static class ActionBridge
         var valid = allowAgari ? button == "Agari" : button == "Bet" || button == "Free";
         if (!valid)
         {
+            if (!allowAgari && !string.IsNullOrWhiteSpace(state) && state != "BetWait" && state != "FreeWait")
+            {
+                ProbeLog.Write("bridge_stale_main_completed", new
+                {
+                    state,
+                    button,
+                    snapshot = GameManagerProjection.Snapshot(manager, "stale_main")
+                });
+                Finish(item, success: true, null, manager);
+                active = null;
+                return;
+            }
             if (allowAgari && (state == "Result" || state == "AgariRun" || state == "BetWait"))
             {
                 ProbeLog.Write("bridge_stale_agari_completed", new
