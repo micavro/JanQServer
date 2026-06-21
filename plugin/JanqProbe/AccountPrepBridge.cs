@@ -126,9 +126,9 @@ internal static class AccountPrepBridge
 
     public static bool IsActive => active;
 
-    public static void Initialize(string gameRoot)
+    public static void Initialize(string workspace)
     {
-        var workspace = Path.GetFullPath(Path.Combine(gameRoot, "..", ".."));
+        workspace = Path.GetFullPath(workspace);
         rootPath = Path.Combine(workspace, "_runtime", "account_prep");
         requestPath = Path.Combine(rootPath, "request.json");
         statusPath = Path.Combine(rootPath, "status.json");

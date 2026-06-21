@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import threading
 import time
@@ -15,6 +16,9 @@ from janq_lab.automation.policy import BotAction, StrategyPolicy
 from janq_lab.automation.session_log import SessionLogger
 from janq_lab.automation.state import BotGameState, CurrencyState, reduce_event
 from janq_lab.probe.events import parse_event
+from scripts import run_account_batch as account_batch_script
+from scripts import run_account_prep as account_prep_script
+from scripts import run_register_janq_loop as register_loop_script
 from scripts.run_account_batch import classify_status, send_bridge_command, summarize_session
 from scripts.run_register_janq_loop import (
     cleanup_bridge_working_files as cleanup_register_bridge_files,
@@ -49,6 +53,39 @@ class AutomationTests(unittest.TestCase):
         config = AutomationConfig(mode="plugin_live", enter_janq_on_start=True)
         config.validate()
         self.assertTrue(config.enter_janq_on_start)
+
+    def test_cli_scripts_can_rebind_workspace_root(self):
+        original_env_workspace = os.environ.get("JANQ_WORKSPACE")
+        original_env_log = os.environ.get("JANQ_PROBE_LOG")
+        original_register_root = register_loop_script.ROOT
+        original_prep_root = account_prep_script.ROOT
+        original_batch_root = account_batch_script.ROOT
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = (Path(tmp) / "JanQ2").resolve()
+
+                register_loop_script.configure_root(root)
+                account_prep_script.configure_root(root)
+                account_batch_script.configure_root(root)
+
+                self.assertEqual(root, register_loop_script.ROOT)
+                self.assertEqual(root / "_runtime" / "bridge", register_loop_script.BRIDGE_DIR)
+                self.assertEqual(root / "_runtime" / "logs" / "janq_events.jsonl", register_loop_script.EVENTS_PATH)
+                self.assertEqual(root / "_runtime" / "account_prep", account_prep_script.RUNTIME)
+                self.assertEqual(root / "src", account_batch_script.SRC)
+                self.assertEqual(str(root), os.environ["JANQ_WORKSPACE"])
+        finally:
+            register_loop_script.configure_root(original_register_root)
+            account_prep_script.configure_root(original_prep_root)
+            account_batch_script.configure_root(original_batch_root)
+            if original_env_workspace is None:
+                os.environ.pop("JANQ_WORKSPACE", None)
+            else:
+                os.environ["JANQ_WORKSPACE"] = original_env_workspace
+            if original_env_log is None:
+                os.environ.pop("JANQ_PROBE_LOG", None)
+            else:
+                os.environ["JANQ_PROBE_LOG"] = original_env_log
 
     def test_account_store_selects_account_without_exposing_password(self):
         with tempfile.TemporaryDirectory() as tmp:

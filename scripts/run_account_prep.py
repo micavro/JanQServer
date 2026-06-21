@@ -4,16 +4,37 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
+import sys
 import time
 import uuid
 
 
-ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / "_runtime" / "account_prep"
-REQUEST_PATH = RUNTIME / "request.json"
-STATUS_PATH = RUNTIME / "status.json"
-ACCOUNTS_PATH = ROOT / "_runtime" / "accounts" / "accounts.json"
+def _default_root() -> Path:
+    env_root = os.environ.get("JANQ_WORKSPACE")
+    if env_root and env_root.strip():
+        return Path(env_root).expanduser().resolve()
+    return Path(__file__).resolve().parents[1]
+
+
+def configure_root(root: str | Path | None = None, *, update_environment: bool = True) -> Path:
+    global ROOT, RUNTIME, REQUEST_PATH, STATUS_PATH, ACCOUNTS_PATH
+
+    ROOT = (Path(root).expanduser() if root is not None else _default_root()).resolve()
+    src = ROOT / "src"
+    if str(src) not in sys.path:
+        sys.path.insert(0, str(src))
+    RUNTIME = ROOT / "_runtime" / "account_prep"
+    REQUEST_PATH = RUNTIME / "request.json"
+    STATUS_PATH = RUNTIME / "status.json"
+    ACCOUNTS_PATH = ROOT / "_runtime" / "accounts" / "accounts.json"
+    if update_environment:
+        os.environ["JANQ_WORKSPACE"] = str(ROOT)
+    return ROOT
+
+
+configure_root(update_environment=False)
 
 
 def _read_json(path: Path) -> dict:
@@ -45,7 +66,9 @@ def main() -> int:
     parser.add_argument("--request-id")
     parser.add_argument("--max-stories", type=int, default=None)
     parser.add_argument("--timeout-seconds", type=int, default=7200)
+    parser.add_argument("--root", default=None, help="JanQ workspace root; defaults to this script's repository.")
     args = parser.parse_args()
+    configure_root(args.root)
 
     existing_request = _read_json(REQUEST_PATH)
     existing_status = _read_json(STATUS_PATH)

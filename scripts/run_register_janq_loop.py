@@ -16,7 +16,14 @@ from typing import Any
 import uuid
 
 
-ROOT = Path(__file__).resolve().parents[1]
+def _default_root() -> Path:
+    env_root = os.environ.get("JANQ_WORKSPACE")
+    if env_root and env_root.strip():
+        return Path(env_root).expanduser().resolve()
+    return Path(__file__).resolve().parents[1]
+
+
+ROOT = _default_root()
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
@@ -24,18 +31,33 @@ if str(SRC) not in sys.path:
 from janq_lab.automation.accounts import update_account_result  # noqa: E402
 
 
-GAME_PATH = ROOT / "sega_net_MJ" / "MJ" / "MJ.exe"
-GAME_DIR = GAME_PATH.parent
-BEPINEX_LOG = GAME_DIR / "BepInEx" / "LogOutput.log"
-EVENTS_PATH = ROOT / "_runtime" / "logs" / "janq_events.jsonl"
-BRIDGE_DIR = ROOT / "_runtime" / "bridge"
-PREP_DIR = ROOT / "_runtime" / "account_prep"
-PREP_REQUEST = PREP_DIR / "request.json"
-PREP_STATUS = PREP_DIR / "status.json"
-ACCOUNTS_PATH = ROOT / "_runtime" / "accounts" / "accounts.json"
-LOOP_DIR = ROOT / "_runtime" / "register_janq_loop"
-LOOP_STATUS = LOOP_DIR / "status.json"
-SESSIONS_DIR = ROOT / "_runtime" / "sessions"
+def configure_root(root: str | Path | None = None, *, update_environment: bool = True) -> Path:
+    global ROOT, SRC, GAME_PATH, GAME_DIR, BEPINEX_LOG, EVENTS_PATH, BRIDGE_DIR
+    global PREP_DIR, PREP_REQUEST, PREP_STATUS, ACCOUNTS_PATH, LOOP_DIR, LOOP_STATUS, SESSIONS_DIR
+
+    ROOT = (Path(root).expanduser() if root is not None else _default_root()).resolve()
+    SRC = ROOT / "src"
+    if str(SRC) not in sys.path:
+        sys.path.insert(0, str(SRC))
+    GAME_PATH = ROOT / "sega_net_MJ" / "MJ" / "MJ.exe"
+    GAME_DIR = GAME_PATH.parent
+    BEPINEX_LOG = GAME_DIR / "BepInEx" / "LogOutput.log"
+    EVENTS_PATH = ROOT / "_runtime" / "logs" / "janq_events.jsonl"
+    BRIDGE_DIR = ROOT / "_runtime" / "bridge"
+    PREP_DIR = ROOT / "_runtime" / "account_prep"
+    PREP_REQUEST = PREP_DIR / "request.json"
+    PREP_STATUS = PREP_DIR / "status.json"
+    ACCOUNTS_PATH = ROOT / "_runtime" / "accounts" / "accounts.json"
+    LOOP_DIR = ROOT / "_runtime" / "register_janq_loop"
+    LOOP_STATUS = LOOP_DIR / "status.json"
+    SESSIONS_DIR = ROOT / "_runtime" / "sessions"
+    if update_environment:
+        os.environ["JANQ_WORKSPACE"] = str(ROOT)
+        os.environ["JANQ_PROBE_LOG"] = str(EVENTS_PATH)
+    return ROOT
+
+
+configure_root(ROOT, update_environment=False)
 
 COMPLETE_PREP_STAGES = {"complete", "complete_accessible_stories"}
 LOADING_STAGES = (
@@ -74,7 +96,9 @@ def main() -> int:
     parser.add_argument("--keep-game-open", action="store_true")
     parser.add_argument("--nickname-prefix", default="JanQ")
     parser.add_argument("--continue-on-error", action="store_true")
+    parser.add_argument("--root", default=None, help="JanQ workspace root; defaults to this script's repository.")
     args = parser.parse_args()
+    configure_root(args.root)
 
     if args.count < 1:
         raise ValueError("--count must be positive")

@@ -17,7 +17,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$root = $PSScriptRoot
+$root = (Resolve-Path -LiteralPath $PSScriptRoot).Path
+$env:JANQ_WORKSPACE = $root
+$env:JANQ_PROBE_LOG = Join-Path $root "_runtime\logs\janq_events.jsonl"
 $gamePath = (Resolve-Path (Join-Path $root "sega_net_MJ\MJ\MJ.exe")).Path
 $gameDirectory = Split-Path -Parent $gamePath
 $bepInExCore = Join-Path $gameDirectory "BepInEx\core\BepInEx.dll"
@@ -59,14 +61,24 @@ function Ensure-BepInExRuntime {
 
 Ensure-BepInExRuntime
 
+function Test-CommandLineInWorkspace {
+    param([string]$CommandLine)
+    if ([string]::IsNullOrWhiteSpace($CommandLine)) {
+        return $false
+    }
+    $workspacePattern = [regex]::Escape($root.TrimEnd('\')) + '(\\|"|\s|$)'
+    return $CommandLine -match $workspacePattern
+}
+
 $existingBot = Get-CimInstance Win32_Process |
     Where-Object {
         $_.Name -in @("python.exe", "pythonw.exe") -and
-        ($_.CommandLine -match "janq_lab\.automation\.bot" -or $_.CommandLine -match "run_account_batch\.py")
+        ($_.CommandLine -match "janq_lab\.automation\.bot" -or $_.CommandLine -match "run_account_batch\.py") -and
+        (Test-CommandLineInWorkspace $_.CommandLine)
     } |
     Select-Object -First 1
 if ($null -ne $existingBot) {
-    throw "Existing JanQ bot/batch process detected: PID $($existingBot.ProcessId)"
+    throw "Existing JanQ bot/batch process detected for ${root}: PID $($existingBot.ProcessId)"
 }
 
 $runningGame = Get-CimInstance Win32_Process |
@@ -131,6 +143,7 @@ if (-not $pythonExe) {
 }
 $batchArgs = @(
     (Join-Path $root "scripts\run_account_batch.py"),
+    "--root", "$root",
     "--accounts-path", "$AccountsPath",
     "--config", (Join-Path $root "automation.example.yaml"),
     "--events-path", (Join-Path $root "_runtime\logs\janq_events.jsonl"),
