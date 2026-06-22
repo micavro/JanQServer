@@ -1734,7 +1734,8 @@ class AutomationTests(unittest.TestCase):
             self.assertEqual("interrupted_prep_retry_exhausted_finishing_first_resource_sync", rows[0]["status"])
             self.assertEqual(5, rows[0]["resumeFailureCount"])
             self.assertEqual(5, rows[0]["resumeFailureLimit"])
-            self.assertEqual(1200, rows[0]["currentMjchip"])
+            self.assertNotIn("currentMjchip", rows[0])
+            self.assertNotIn("finalMjchip", rows[0])
             self.assertEqual(1, len(interrupted_lines))
             self.assertIn("prep_retry_exhausted:finishing_first_resource_sync", interrupted_lines[0])
         finally:

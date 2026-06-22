@@ -483,7 +483,7 @@ def interrupt_prep_account(
         account_update = update_account_result(
             ACCOUNTS_PATH,
             request_id,
-            current_mjchip=status.get("currentMjchip") if isinstance(status.get("currentMjchip"), int) else None,
+            current_mjchip=None,
             status=account_status,
             terminal_reason=terminal_reason,
             resume_failure_count=restarts,
