@@ -1,4 +1,6 @@
 import argparse
+import contextlib
+import io
 import json
 import os
 import tempfile
@@ -27,6 +29,7 @@ from scripts.run_register_janq_loop import (
     load_loop_resume_state,
     mark_account_after_loop_error,
     send_bridge_command as send_register_bridge_command,
+    should_preserve_prep_state,
     should_attempt_exit_to_login,
 )
 
@@ -1471,9 +1474,306 @@ class AutomationTests(unittest.TestCase):
                 resume = load_loop_resume_state(args)
                 args.count = 6
                 ignored = load_loop_resume_state(args)
+                args.count = 5
+                register_loop_script.LOOP_STATUS.write_text(
+                    json.dumps(
+                        {
+                            "state": "account_prep_interrupted",
+                            "count": 5,
+                            "completed": 2,
+                            "failed": 4,
+                            "attempt": 9,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                interrupted_resume = load_loop_resume_state(args)
 
             self.assertEqual({"completed": 3, "failed": 1, "attempt": 4}, resume)
             self.assertEqual({}, ignored)
+            self.assertEqual({"completed": 2, "failed": 4, "attempt": 9}, interrupted_resume)
+        finally:
+            register_loop_script.configure_root(original_root)
+            if original_env_workspace is None:
+                os.environ.pop("JANQ_WORKSPACE", None)
+            else:
+                os.environ["JANQ_WORKSPACE"] = original_env_workspace
+            if original_env_log is None:
+                os.environ.pop("JANQ_PROBE_LOG", None)
+            else:
+                os.environ["JANQ_PROBE_LOG"] = original_env_log
+
+    def test_register_loop_preserves_active_prep_checkpoint_under_fresh_prep(self):
+        request = {"id": "req-a", "nickname": "Mica01"}
+        status = {
+            "requestId": "req-a",
+            "active": True,
+            "accountCaptured": True,
+            "stage": "finishing_first_resource_sync",
+        }
+
+        self.assertTrue(should_preserve_prep_state(request, status))
+
+    def test_register_loop_preserves_failed_captured_prep_checkpoint_under_fresh_prep(self):
+        request = {}
+        status = {
+            "requestId": "req-a",
+            "active": False,
+            "accountCaptured": True,
+            "stage": "failed",
+        }
+
+        self.assertTrue(should_preserve_prep_state(request, status))
+
+    def test_register_loop_allows_fresh_prep_when_checkpoint_is_complete(self):
+        request = {"id": "req-a", "nickname": "Mica01"}
+        status = {
+            "requestId": "req-a",
+            "active": False,
+            "accountCaptured": True,
+            "stage": "complete",
+        }
+
+        self.assertFalse(should_preserve_prep_state(request, status))
+
+    def test_register_loop_does_not_resume_login_account_timeout(self):
+        args = argparse.Namespace(bankruptcy_mjchip=99, target_mjchip=100000)
+        row = {
+            "requestId": "req-a",
+            "status": "stopped_login_account_failed_local_action_timeout",
+            "lastTerminalReason": "login_account_failed:local_action_timeout",
+            "finalMjchip": 11870,
+        }
+
+        self.assertFalse(register_loop_script.is_resumable_account(row, args))
+
+    def test_register_loop_still_resumes_runtime_nonterminal_stop(self):
+        args = argparse.Namespace(bankruptcy_mjchip=99, target_mjchip=100000)
+        row = {
+            "requestId": "req-a",
+            "status": "stopped_nonterminal_stop",
+            "lastTerminalReason": "nonterminal_stop",
+            "finalMjchip": 11870,
+        }
+
+        self.assertTrue(register_loop_script.is_resumable_account(row, args))
+
+    def test_register_loop_interrupts_login_account_failure_immediately(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "accounts.json"
+            path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "requestId": "req-a",
+                            "loginId": "mja12345678",
+                            "password": "secret-pass",
+                            "nickname": "Mica01",
+                            "finalMjchip": 11870,
+                            "status": "registered",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            policy = register_loop_script.resolve_account_stop_policy(
+                path,
+                "req-a",
+                {
+                    "terminal": False,
+                    "terminalReason": "login_account_failed:local_action_timeout",
+                    "accountStatus": "stopped_login_account_failed_local_action_timeout",
+                },
+                max_resume_failures=5,
+            )
+            update_account_result(
+                path,
+                "req-a",
+                current_mjchip=11870,
+                status=policy["accountStatus"],
+                terminal_reason=policy["terminalReason"],
+                resume_failure_count=policy["resumeFailureCount"],
+                resume_failure_limit=policy["resumeFailureLimit"],
+                resume_failure_reason=policy["resumeFailureReason"],
+                interrupted_at=policy["interruptedAt"],
+            )
+            rows = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertTrue(policy["interrupted"])
+        self.assertEqual("interrupted_login_account_failed_local_action_timeout", rows[0]["status"])
+        self.assertEqual(1, rows[0]["resumeFailureCount"])
+        self.assertEqual(5, rows[0]["resumeFailureLimit"])
+        self.assertIn("interruptedAt", rows[0])
+        self.assertEqual("secret-pass", rows[0]["password"])
+
+    def test_register_loop_allows_runtime_failure_before_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "accounts.json"
+            path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "requestId": "req-a",
+                            "loginId": "mja12345678",
+                            "password": "secret-pass",
+                            "status": "stopped_nonterminal_stop",
+                            "lastTerminalReason": "nonterminal_stop",
+                            "resumeFailureReason": "nonterminal_stop",
+                            "resumeFailureCount": 3,
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            policy = register_loop_script.resolve_account_stop_policy(
+                path,
+                "req-a",
+                {
+                    "terminal": False,
+                    "terminalReason": "nonterminal_stop",
+                    "accountStatus": "stopped_nonterminal_stop",
+                },
+                max_resume_failures=5,
+            )
+
+        self.assertFalse(policy["interrupted"])
+        self.assertEqual("stopped_nonterminal_stop", policy["accountStatus"])
+        self.assertEqual(4, policy["resumeFailureCount"])
+        self.assertEqual(5, policy["resumeFailureLimit"])
+
+    def test_register_loop_interrupts_runtime_failure_at_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "accounts.json"
+            path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "requestId": "req-a",
+                            "loginId": "mja12345678",
+                            "password": "secret-pass",
+                            "status": "stopped_nonterminal_stop",
+                            "lastTerminalReason": "nonterminal_stop",
+                            "resumeFailureReason": "nonterminal_stop",
+                            "resumeFailureCount": 4,
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            policy = register_loop_script.resolve_account_stop_policy(
+                path,
+                "req-a",
+                {
+                    "terminal": False,
+                    "terminalReason": "nonterminal_stop",
+                    "accountStatus": "stopped_nonterminal_stop",
+                },
+                max_resume_failures=5,
+            )
+
+        self.assertTrue(policy["interrupted"])
+        self.assertEqual("interrupted_retry_exhausted_nonterminal_stop", policy["accountStatus"])
+        self.assertEqual(5, policy["resumeFailureCount"])
+        self.assertEqual(5, policy["resumeFailureLimit"])
+        self.assertIsNotNone(policy["interruptedAt"])
+
+    def test_register_loop_interrupts_prep_after_restart_limit(self):
+        original_env_workspace = os.environ.get("JANQ_WORKSPACE")
+        original_env_log = os.environ.get("JANQ_PROBE_LOG")
+        original_root = register_loop_script.ROOT
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                register_loop_script.configure_root(root)
+                register_loop_script.ACCOUNTS_PATH.parent.mkdir(parents=True)
+                register_loop_script.ACCOUNTS_PATH.write_text(
+                    json.dumps(
+                        [
+                            {
+                                "requestId": "req-a",
+                                "loginId": "mja12345678",
+                                "password": "secret-pass",
+                                "nickname": "Mica01",
+                                "status": "registered",
+                            }
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+                register_loop_script.PREP_REQUEST.parent.mkdir(parents=True)
+                register_loop_script.PREP_REQUEST.write_text(
+                    json.dumps({"id": "req-a", "nickname": "Mica01"}),
+                    encoding="utf-8",
+                )
+                args = argparse.Namespace(max_prep_restarts_per_account=5)
+
+                payload = register_loop_script.interrupt_prep_account(
+                    args,
+                    request_id="req-a",
+                    nickname="Mica01",
+                    status={
+                        "requestId": "req-a",
+                        "nickname": "Mica01",
+                        "active": True,
+                        "accountCaptured": True,
+                        "stage": "finishing_first_resource_sync",
+                        "currentMjchip": 1200,
+                    },
+                    stage="finishing_first_resource_sync",
+                    restarts=5,
+                )
+                rows = json.loads(register_loop_script.ACCOUNTS_PATH.read_text(encoding="utf-8"))
+                interrupted_lines = register_loop_script.INTERRUPTED_ACCOUNTS_LOG.read_text(
+                    encoding="utf-8"
+                ).splitlines()
+
+            self.assertTrue(payload["interrupted"])
+            self.assertEqual("interrupted_prep_retry_exhausted_finishing_first_resource_sync", rows[0]["status"])
+            self.assertEqual(5, rows[0]["resumeFailureCount"])
+            self.assertEqual(5, rows[0]["resumeFailureLimit"])
+            self.assertEqual(1200, rows[0]["currentMjchip"])
+            self.assertEqual(1, len(interrupted_lines))
+            self.assertIn("prep_retry_exhausted:finishing_first_resource_sync", interrupted_lines[0])
+        finally:
+            register_loop_script.configure_root(original_root)
+            if original_env_workspace is None:
+                os.environ.pop("JANQ_WORKSPACE", None)
+            else:
+                os.environ["JANQ_WORKSPACE"] = original_env_workspace
+            if original_env_log is None:
+                os.environ.pop("JANQ_PROBE_LOG", None)
+            else:
+                os.environ["JANQ_PROBE_LOG"] = original_env_log
+
+    def test_register_loop_writes_health_status(self):
+        original_env_workspace = os.environ.get("JANQ_WORKSPACE")
+        original_env_log = os.environ.get("JANQ_PROBE_LOG")
+        original_root = register_loop_script.ROOT
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                register_loop_script.configure_root(root)
+
+                with contextlib.redirect_stdout(io.StringIO()):
+                    register_loop_script.write_loop_status(
+                        {
+                            "state": "account_prep_interrupted",
+                            "count": 5,
+                            "attempt": 3,
+                            "requestId": "req-a",
+                            "failed": 1,
+                            "updatedAt": "2026-06-23T00:00:00+00:00",
+                        }
+                    )
+                health = json.loads(register_loop_script.HEALTH_PATH.read_text(encoding="utf-8"))
+
+            self.assertEqual("loop", health["source"])
+            self.assertEqual("account_prep_interrupted", health["state"])
+            self.assertEqual("req-a", health["requestId"])
+            self.assertEqual(3, health["attempt"])
         finally:
             register_loop_script.configure_root(original_root)
             if original_env_workspace is None:

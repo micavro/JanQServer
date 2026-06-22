@@ -73,6 +73,10 @@ def update_account_result(
     terminal_reason: str | None = None,
     session_path: str | None = None,
     completed_hands: int | None = None,
+    resume_failure_count: int | None = None,
+    resume_failure_limit: int | None = None,
+    resume_failure_reason: str | None = None,
+    interrupted_at: str | None = None,
 ) -> dict[str, Any]:
     account_path = Path(path)
     raw, rows = _load_account_rows(account_path)
@@ -101,6 +105,21 @@ def update_account_result(
         row["lastSession"] = session_path
     if completed_hands is not None:
         row["lastCompletedHands"] = completed_hands
+    if resume_failure_count is None:
+        row.pop("resumeFailureCount", None)
+        row.pop("resumeFailureLimit", None)
+        row.pop("resumeFailureReason", None)
+    else:
+        row["resumeFailureCount"] = resume_failure_count
+        if resume_failure_limit is not None:
+            row["resumeFailureLimit"] = resume_failure_limit
+        if resume_failure_reason is not None:
+            row["resumeFailureReason"] = resume_failure_reason
+    if interrupted_at is None:
+        if not str(status).startswith("interrupted_"):
+            row.pop("interruptedAt", None)
+    else:
+        row["interruptedAt"] = interrupted_at
 
     _atomic_write_json(account_path, raw)
     return {
@@ -112,6 +131,10 @@ def update_account_result(
         "terminal_reason": terminal_reason,
         "session_path": session_path,
         "completed_hands": completed_hands,
+        "resume_failure_count": resume_failure_count,
+        "resume_failure_limit": resume_failure_limit,
+        "resume_failure_reason": resume_failure_reason,
+        "interrupted_at": interrupted_at,
     }
 
 

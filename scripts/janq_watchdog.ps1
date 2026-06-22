@@ -1,7 +1,29 @@
 param(
     [int]$Count = 50,
+    [int]$Bet = 50,
+    [int]$TargetMjchip = 20000,
+    [int]$BankruptcyMjchip = 49,
+    [int]$GameWidth = 320,
+    [int]$GameHeight = 180,
+    [string]$NicknamePrefix = "JanQ",
+    [int]$PrepTimeoutSeconds = 7200,
+    [int]$PrepLoadingStallSeconds = 150,
+    [int]$PrepGenericStallSeconds = 420,
+    [int]$PrepMaxStories = 0,
+    [int]$BotMaxHands = 1000000,
+    [int]$BotMaxRuntimeSeconds = 8640000,
+    [int]$ExitTimeoutSeconds = 25,
+    [int]$MaxAccountResumeFailures = 5,
+    [int]$MaxPrepRestartsPerAccount = 5,
+    [ValidateSet("public", "greedy", "route_ev", "route_ev2")]
+    [string]$Strategy = "route_ev",
     [int]$StaleMinutes = 75,
-    [switch]$HiddenGame = $true
+    [switch]$ShowGame,
+    [switch]$HiddenGame = $true,
+    [switch]$FreshGame,
+    [switch]$FreshPrep,
+    [switch]$NoResumeStopped,
+    [switch]$ContinueOnError
 )
 
 $ErrorActionPreference = "Continue"
@@ -11,6 +33,8 @@ $LoopDir = Join-Path $Runtime "register_janq_loop"
 $WatchdogDir = Join-Path $Runtime "watchdog"
 $LogPath = Join-Path $WatchdogDir "watchdog.log"
 $StatusPath = Join-Path $LoopDir "status.json"
+$HealthPath = Join-Path $LoopDir "health.json"
+$LaunchArgsPath = Join-Path $LoopDir "launch_args.json"
 $PrepStatusPath = Join-Path $Runtime "account_prep\status.json"
 $SessionsDir = Join-Path $Runtime "sessions"
 $GamePath = Join-Path $Root "sega_net_MJ\MJ\MJ.exe"
@@ -20,6 +44,51 @@ New-Item -ItemType Directory -Force -Path $WatchdogDir | Out-Null
 function Write-WatchdogLog($Message) {
     $line = "{0} {1}" -f (Get-Date -Format o), $Message
     Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
+}
+
+function Write-JsonAtomic($Path, $Value) {
+    try {
+        $dir = Split-Path -Parent $Path
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $tmp = Join-Path $dir (".{0}.tmp" -f ([guid]::NewGuid().ToString("N")))
+        $Value | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $tmp -Encoding UTF8
+        Move-Item -LiteralPath $tmp -Destination $Path -Force
+    } catch {
+        Write-WatchdogLog "json_write_failed path=$Path error=$($_.Exception.Message)"
+    }
+}
+
+function Write-WatchdogHealth($Status, $Prep, $LoopProcs, $BotProcs, $MjProcs, $ProgressAge, $Alert, $Action) {
+    $payload = [ordered]@{
+        checkedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+        source = "watchdog"
+        state = if ($Status) { $Status.state } else { $null }
+        attempt = if ($Status -and $Status.PSObject.Properties.Name -contains "attempt") { $Status.attempt } else { $null }
+        iteration = if ($Status -and $Status.PSObject.Properties.Name -contains "iteration") { $Status.iteration } else { $null }
+        count = $Count
+        completed = if ($Status -and $Status.PSObject.Properties.Name -contains "completed") { $Status.completed } else { $null }
+        failed = if ($Status -and $Status.PSObject.Properties.Name -contains "failed") { $Status.failed } else { $null }
+        requestId = if ($Status -and $Status.PSObject.Properties.Name -contains "requestId") { $Status.requestId } elseif ($Prep) { $Prep.requestId } else { $null }
+        nickname = if ($Status -and $Status.PSObject.Properties.Name -contains "nickname") { $Status.nickname } elseif ($Prep) { $Prep.nickname } else { $null }
+        prep = if ($Prep) {
+            [ordered]@{
+                active = $Prep.active
+                stage = $Prep.stage
+                requestId = $Prep.requestId
+                accountCaptured = $Prep.accountCaptured
+                error = $Prep.error
+            }
+        } else { $null }
+        processes = [ordered]@{
+            loop = @($LoopProcs).Count
+            bot = @($BotProcs).Count
+            mj = @($MjProcs).Count
+        }
+        progressAgeMin = if ($ProgressAge -ne $null) { [math]::Round($ProgressAge, 1) } else { $null }
+        alert = $Alert
+        lastRecoveryAction = $Action
+    }
+    Write-JsonAtomic $HealthPath $payload
 }
 
 function Read-JsonFile($Path) {
@@ -32,6 +101,30 @@ function Read-JsonFile($Path) {
     }
     return $null
 }
+
+function Apply-SavedLaunchArgs {
+    $saved = Read-JsonFile $LaunchArgsPath
+    if (-not $saved) {
+        return
+    }
+    foreach ($name in @(
+        "Count", "Bet", "TargetMjchip", "BankruptcyMjchip", "GameWidth", "GameHeight",
+        "NicknamePrefix", "PrepTimeoutSeconds", "PrepLoadingStallSeconds", "PrepGenericStallSeconds",
+        "PrepMaxStories", "BotMaxHands", "BotMaxRuntimeSeconds", "ExitTimeoutSeconds",
+        "MaxAccountResumeFailures", "MaxPrepRestartsPerAccount", "Strategy"
+    )) {
+        if ($saved.PSObject.Properties.Name -contains $name) {
+            Set-Variable -Scope Script -Name $name -Value $saved.$name
+        }
+    }
+    foreach ($name in @("ShowGame", "HiddenGame", "FreshGame", "FreshPrep", "NoResumeStopped", "ContinueOnError")) {
+        if ($saved.PSObject.Properties.Name -contains $name) {
+            Set-Variable -Scope Script -Name $name -Value ([bool]$saved.$name)
+        }
+    }
+}
+
+Apply-SavedLaunchArgs
 
 function Test-CommandLineInWorkspace($CommandLine) {
     if ([string]::IsNullOrWhiteSpace($CommandLine)) {
@@ -97,10 +190,31 @@ function Start-JanQBatch {
         "-ExecutionPolicy", "Bypass",
         "-File", $StartScript,
         "-Count", "$Count",
-        "-HiddenGame"
+        "-Bet", "$Bet",
+        "-TargetMjchip", "$TargetMjchip",
+        "-BankruptcyMjchip", "$BankruptcyMjchip",
+        "-GameWidth", "$GameWidth",
+        "-GameHeight", "$GameHeight",
+        "-NicknamePrefix", "$NicknamePrefix",
+        "-PrepTimeoutSeconds", "$PrepTimeoutSeconds",
+        "-PrepLoadingStallSeconds", "$PrepLoadingStallSeconds",
+        "-PrepGenericStallSeconds", "$PrepGenericStallSeconds",
+        "-BotMaxHands", "$BotMaxHands",
+        "-BotMaxRuntimeSeconds", "$BotMaxRuntimeSeconds",
+        "-ExitTimeoutSeconds", "$ExitTimeoutSeconds",
+        "-MaxAccountResumeFailures", "$MaxAccountResumeFailures",
+        "-MaxPrepRestartsPerAccount", "$MaxPrepRestartsPerAccount",
+        "-Strategy", "$Strategy"
     )
+    if ($PrepMaxStories -gt 0) { $args += @("-PrepMaxStories", "$PrepMaxStories") }
+    if ($ShowGame) { $args += "-ShowGame" }
+    if ($HiddenGame) { $args += "-HiddenGame" }
+    if ($FreshGame) { $args += "-FreshGame" }
+    if ($FreshPrep) { $args += "-FreshPrep" }
+    if ($NoResumeStopped) { $args += "-NoResumeStopped" }
+    if ($ContinueOnError) { $args += "-ContinueOnError" }
     Start-Process -FilePath powershell.exe -ArgumentList $args -WorkingDirectory $Root -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err | Out-Null
-    Write-WatchdogLog "started_new_batch count=$Count out=$out err=$err"
+    Write-WatchdogLog "started_new_batch count=$Count bet=$Bet target=$TargetMjchip bankruptcy=$BankruptcyMjchip strategy=$Strategy out=$out err=$err"
 }
 
 function Get-LatestProgressTime {
@@ -179,35 +293,41 @@ try {
             -not [string]::IsNullOrWhiteSpace([string]$prep.error)
         ) {
             Write-WatchdogLog "abnormal prep_login_error_stall stage=$($prep.stage) restarting"
+            Write-WatchdogHealth $status $prep $loopProcs $botProcs $mjProcs $progressAge "prep_login_error_stall" "restart_batch"
             Stop-JanQRuntime
             Start-JanQBatch
             exit 0
         }
         if ($mjProcs.Count -eq 0) {
             Write-WatchdogLog "abnormal runner_alive_but_mj_missing restarting"
+            Write-WatchdogHealth $status $prep $loopProcs $botProcs $mjProcs $progressAge "runner_alive_but_mj_missing" "restart_batch"
             Stop-JanQRuntime
             Start-JanQBatch
             exit 0
         }
         if ($progressAge -gt $StaleMinutes) {
             Write-WatchdogLog "abnormal stale_progress ageMin=$([math]::Round($progressAge,1)) restarting"
+            Write-WatchdogHealth $status $prep $loopProcs $botProcs $mjProcs $progressAge "stale_progress" "restart_batch"
             Stop-JanQRuntime
             Start-JanQBatch
             exit 0
         }
         Write-WatchdogLog "normal runner_active"
+        Write-WatchdogHealth $status $prep $loopProcs $botProcs $mjProcs $progressAge $null "none"
         exit 0
     }
 
     if ($status -and $status.state -eq "complete") {
         Write-WatchdogLog "batch_complete launching_next_batch"
+        Write-WatchdogHealth $status $prep $loopProcs $botProcs $mjProcs $progressAge "batch_complete" "start_next_batch"
         Stop-JanQRuntime
         Start-JanQBatch
         exit 0
     }
 
-    if ($status -and ($status.state -eq "failed" -or $status.state -eq "account_finished")) {
+    if ($status -and (@("failed", "failed_recovered", "account_finished", "account_prep_interrupted") -contains $status.state)) {
         Write-WatchdogLog "nonrunning_noncomplete_state=$($status.state) restarting_to_resume"
+        Write-WatchdogHealth $status $prep $loopProcs $botProcs $mjProcs $progressAge "nonrunning_noncomplete_state" "restart_batch"
         Stop-JanQRuntime
         Start-JanQBatch
         exit 0
@@ -215,12 +335,14 @@ try {
 
     if ($prep -and $prep.active -eq $true) {
         Write-WatchdogLog "prep_active_but_runner_missing restarting_to_resume requestId=$($prep.requestId)"
+        Write-WatchdogHealth $status $prep $loopProcs $botProcs $mjProcs $progressAge "prep_active_but_runner_missing" "restart_batch"
         Stop-JanQRuntime
         Start-JanQBatch
         exit 0
     }
 
     Write-WatchdogLog "no_runner_starting_batch"
+    Write-WatchdogHealth $status $prep $loopProcs $botProcs $mjProcs $progressAge "no_runner" "start_batch"
     Stop-JanQRuntime
     Start-JanQBatch
 } finally {

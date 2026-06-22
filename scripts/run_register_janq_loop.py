@@ -33,7 +33,8 @@ from janq_lab.automation.accounts import update_account_result  # noqa: E402
 
 def configure_root(root: str | Path | None = None, *, update_environment: bool = True) -> Path:
     global ROOT, SRC, GAME_PATH, GAME_DIR, BEPINEX_LOG, EVENTS_PATH, BRIDGE_DIR
-    global PREP_DIR, PREP_REQUEST, PREP_STATUS, ACCOUNTS_PATH, LOOP_DIR, LOOP_STATUS, SESSIONS_DIR
+    global PREP_DIR, PREP_REQUEST, PREP_STATUS, ACCOUNTS_PATH, LOOP_DIR, LOOP_STATUS, HEALTH_PATH, SESSIONS_DIR
+    global INTERRUPTED_ACCOUNTS_LOG
 
     ROOT = (Path(root).expanduser() if root is not None else _default_root()).resolve()
     SRC = ROOT / "src"
@@ -50,6 +51,8 @@ def configure_root(root: str | Path | None = None, *, update_environment: bool =
     ACCOUNTS_PATH = ROOT / "_runtime" / "accounts" / "accounts.json"
     LOOP_DIR = ROOT / "_runtime" / "register_janq_loop"
     LOOP_STATUS = LOOP_DIR / "status.json"
+    HEALTH_PATH = LOOP_DIR / "health.json"
+    INTERRUPTED_ACCOUNTS_LOG = ACCOUNTS_PATH.parent / "interrupted_accounts.jsonl"
     SESSIONS_DIR = ROOT / "_runtime" / "sessions"
     if update_environment:
         os.environ["JANQ_WORKSPACE"] = str(ROOT)
@@ -61,6 +64,7 @@ configure_root(ROOT, update_environment=False)
 
 COMPLETE_PREP_STAGES = {"complete", "complete_accessible_stories"}
 LOADING_STAGES = (
+    "finishing_first_resource_sync",
     "loading_yakuhime_story",
     "loading_yakuhime_submenu_resources",
     "loading_yakuhime_chapters",
@@ -70,6 +74,17 @@ LOGIN_WAIT_STAGES = (
     "waiting_captured_account_login",
 )
 SAFE_EXIT_PHASES = {"bet_wait", "free_wait"}
+DEFAULT_ACCOUNT_RESUME_FAILURE_LIMIT = 5
+DEFAULT_PREP_RESTART_LIMIT = 5
+NON_RESUMABLE_STOPPED_STATUS_PREFIXES = (
+    "stopped_login_account_failed_",
+)
+NON_RESUMABLE_STOPPED_REASON_PREFIXES = (
+    "login_account_failed:",
+)
+IMMEDIATE_INTERRUPT_REASON_PREFIXES = (
+    "login_account_failed:",
+)
 
 
 def main() -> int:
@@ -93,6 +108,8 @@ def main() -> int:
     parser.add_argument("--fresh-game", action="store_true")
     parser.add_argument("--fresh-prep", action="store_true")
     parser.add_argument("--no-resume-stopped", action="store_true")
+    parser.add_argument("--max-account-resume-failures", type=int, default=DEFAULT_ACCOUNT_RESUME_FAILURE_LIMIT)
+    parser.add_argument("--max-prep-restarts-per-account", type=int, default=DEFAULT_PREP_RESTART_LIMIT)
     parser.add_argument("--keep-game-open", action="store_true")
     parser.add_argument("--nickname-prefix", default="JanQ")
     parser.add_argument("--continue-on-error", action="store_true")
@@ -102,6 +119,10 @@ def main() -> int:
 
     if args.count < 1:
         raise ValueError("--count must be positive")
+    if args.max_account_resume_failures < 1:
+        raise ValueError("--max-account-resume-failures must be positive")
+    if args.max_prep_restarts_per_account < 1:
+        raise ValueError("--max-prep-restarts-per-account must be positive")
     ensure_runtime()
     if args.fresh_game:
         stop_copied_mj()
@@ -155,6 +176,24 @@ def main() -> int:
                 else:
                     prep = prepare_account(args, request_id=request_id, nickname=nickname)
                     request_id = str(prep.get("requestId") or request_id)
+                    if prep.get("interrupted"):
+                        failed += 1
+                        write_loop_status(
+                            {
+                                "state": "account_prep_interrupted",
+                                "iteration": iteration,
+                                "count": args.count,
+                                "attempt": attempts,
+                                "requestId": request_id,
+                                "prep": prep,
+                                "completed": completed,
+                                "failed": failed,
+                                "updatedAt": utc_now(),
+                            }
+                        )
+                        cleanup_bridge_working_files()
+                        restart_game(args)
+                        continue
                     write_loop_status(
                         {
                             "state": "account_prepared",
@@ -180,14 +219,24 @@ def main() -> int:
                     target_mjchip=args.target_mjchip,
                     bankruptcy_mjchip=args.bankruptcy_mjchip,
                 )
+                stop_policy = resolve_account_stop_policy(
+                    ACCOUNTS_PATH,
+                    request_id,
+                    terminal,
+                    max_resume_failures=args.max_account_resume_failures,
+                )
                 account_update = update_account_result(
                     ACCOUNTS_PATH,
                     request_id,
                     current_mjchip=summary.get("mjchip"),
-                    status=terminal["accountStatus"],
-                    terminal_reason=terminal["terminalReason"],
+                    status=stop_policy["accountStatus"],
+                    terminal_reason=stop_policy["terminalReason"],
                     session_path=str(session_path),
                     completed_hands=summary.get("completedHands"),
+                    resume_failure_count=stop_policy.get("resumeFailureCount"),
+                    resume_failure_limit=stop_policy.get("resumeFailureLimit"),
+                    resume_failure_reason=stop_policy.get("resumeFailureReason"),
+                    interrupted_at=stop_policy.get("interruptedAt"),
                 )
                 write_loop_status(
                     {
@@ -199,14 +248,42 @@ def main() -> int:
                         "session": str(session_path),
                         "summary": summary,
                         "terminal": terminal,
+                        "stopPolicy": stop_policy,
                         "account": account_update,
                         "updatedAt": utc_now(),
                     }
                 )
+                if stop_policy["interrupted"]:
+                    append_interrupted_account(
+                        source="run_janq",
+                        request_id=request_id,
+                        nickname=str(account_update.get("nickname") or nickname),
+                        status=stop_policy["accountStatus"],
+                        reason=stop_policy["terminalReason"],
+                        details={
+                            "resumeFailureCount": stop_policy.get("resumeFailureCount"),
+                            "resumeFailureLimit": stop_policy.get("resumeFailureLimit"),
+                            "summary": public_session_summary(summary),
+                        },
+                    )
+                    failed += 1
+                    print(
+                        "[loop] interrupting account "
+                        f"{request_id}: {stop_policy['terminalReason']} "
+                        f"failure={stop_policy.get('resumeFailureCount')}/"
+                        f"{stop_policy.get('resumeFailureLimit')}; starting next account",
+                        flush=True,
+                    )
+                    cleanup_bridge_working_files()
+                    restart_game(args)
+                    continue
                 if not terminal["terminal"]:
                     failed += 1
                     print(
-                        f"[loop] nonterminal stop for {request_id}: {terminal['terminalReason']}; restarting MJ and resuming",
+                        "[loop] nonterminal stop for "
+                        f"{request_id}: {terminal['terminalReason']} "
+                        f"failure={stop_policy.get('resumeFailureCount')}/"
+                        f"{stop_policy.get('resumeFailureLimit')}; restarting MJ and resuming",
                         flush=True,
                     )
                     cleanup_bridge_working_files()
@@ -288,11 +365,19 @@ def ensure_runtime() -> None:
 
 
 def prepare_account(args: argparse.Namespace, *, request_id: str, nickname: str) -> dict[str, Any]:
-    if args.fresh_prep:
-        archive_prep_state("fresh")
-
     existing_request = read_json(PREP_REQUEST)
     existing_status = read_json(PREP_STATUS)
+    if args.fresh_prep:
+        if should_preserve_prep_state(existing_request, existing_status):
+            print(
+                "[loop] preserving resumable account prep checkpoint despite --fresh-prep",
+                flush=True,
+            )
+        else:
+            archive_prep_state("fresh")
+            existing_request = {}
+            existing_status = {}
+
     if existing_request and existing_status.get("active"):
         request_id = str(existing_request["id"])
         print(f"[loop] resuming active account prep request {request_id}", flush=True)
@@ -340,6 +425,15 @@ def prepare_account(args: argparse.Namespace, *, request_id: str, nickname: str)
         else:
             stall_limit = args.prep_generic_stall_seconds
         if time.monotonic() - last_progress_at > stall_limit:
+            if restarts >= args.max_prep_restarts_per_account:
+                return interrupt_prep_account(
+                    args,
+                    request_id=request_id,
+                    nickname=nickname,
+                    status=status,
+                    stage=stage,
+                    restarts=restarts,
+                )
             restarts += 1
             print(
                 f"[loop] account prep stalled at {stage or 'unknown'} for {stall_limit:.0f}s; restarting MJ and resuming request {request_id}",
@@ -358,7 +452,83 @@ def prepare_account(args: argparse.Namespace, *, request_id: str, nickname: str)
                 }
             )
         time.sleep(1)
-    raise TimeoutError(f"account prep timed out after {args.prep_timeout_seconds}s")
+    status = read_json(PREP_STATUS)
+    stage = str(status.get("stage") or "timeout")
+    return interrupt_prep_account(
+        args,
+        request_id=request_id,
+        nickname=nickname,
+        status=status,
+        stage="timeout_" + stage,
+        restarts=restarts,
+    )
+
+
+def interrupt_prep_account(
+    args: argparse.Namespace,
+    *,
+    request_id: str,
+    nickname: str,
+    status: dict[str, Any],
+    stage: str,
+    restarts: int,
+) -> dict[str, Any]:
+    interrupted_at = utc_now()
+    stage_name = stage or "unknown"
+    terminal_reason = "prep_retry_exhausted:" + stage_name
+    account_status = "interrupted_prep_retry_exhausted_" + sanitize(stage_name)
+    account_update: dict[str, Any] | None = None
+    update_error: str | None = None
+    try:
+        account_update = update_account_result(
+            ACCOUNTS_PATH,
+            request_id,
+            current_mjchip=status.get("currentMjchip") if isinstance(status.get("currentMjchip"), int) else None,
+            status=account_status,
+            terminal_reason=terminal_reason,
+            resume_failure_count=restarts,
+            resume_failure_limit=args.max_prep_restarts_per_account,
+            resume_failure_reason=terminal_reason,
+            interrupted_at=interrupted_at,
+        )
+    except Exception as exc:
+        update_error = exception_text(exc)
+
+    interrupted_status = dict(status)
+    interrupted_status.update(
+        {
+            "active": False,
+            "stage": "interrupted",
+            "error": terminal_reason,
+            "interruptedAt": interrupted_at,
+            "interruptedReason": terminal_reason,
+            "prepRestarts": restarts,
+            "updatedAt": interrupted_at,
+        }
+    )
+    atomic_write(PREP_STATUS, interrupted_status)
+    archive_prep_state("interrupted")
+    payload = {
+        "interrupted": True,
+        "requestId": request_id,
+        "nickname": nickname,
+        "stage": stage_name,
+        "terminalReason": terminal_reason,
+        "accountStatus": account_status,
+        "prepRestarts": restarts,
+        "account": account_update,
+        "updateError": update_error,
+        "interruptedAt": interrupted_at,
+    }
+    append_interrupted_account(
+        source="account_prep",
+        request_id=request_id,
+        nickname=nickname,
+        status=account_status,
+        reason=terminal_reason,
+        details={"stage": stage_name, "prepRestarts": restarts, "accountUpdateError": update_error},
+    )
+    return payload
 
 
 def run_janq(
@@ -488,6 +658,7 @@ def recover_after_loop_error(
         exc=exc,
         target_mjchip=args.target_mjchip,
         bankruptcy_mjchip=args.bankruptcy_mjchip,
+        max_resume_failures=getattr(args, "max_account_resume_failures", DEFAULT_ACCOUNT_RESUME_FAILURE_LIMIT),
     )
     cleanup_bridge_working_files()
     restart_game(args)
@@ -507,6 +678,7 @@ def mark_account_after_loop_error(
     exc: BaseException,
     target_mjchip: int,
     bankruptcy_mjchip: int,
+    max_resume_failures: int = DEFAULT_ACCOUNT_RESUME_FAILURE_LIMIT,
 ) -> dict[str, Any]:
     summary = summarize_session(session_path) if session_path is not None and session_path.exists() else {}
     terminal = classify_terminal(
@@ -514,36 +686,62 @@ def mark_account_after_loop_error(
         target_mjchip=target_mjchip,
         bankruptcy_mjchip=bankruptcy_mjchip,
     )
-    if terminal["terminal"]:
-        status = terminal["accountStatus"]
-        terminal_reason = terminal["terminalReason"]
-    else:
+    if not terminal["terminal"]:
         terminal_reason = "loop_exception:" + exception_text(exc)
-        status = "stopped_" + sanitize(terminal_reason)
+        terminal = {
+            "terminal": False,
+            "terminalReason": terminal_reason,
+            "accountStatus": "stopped_" + sanitize(terminal_reason),
+        }
+    stop_policy = resolve_account_stop_policy(
+        accounts_path,
+        request_id,
+        terminal,
+        max_resume_failures=max_resume_failures,
+    )
 
     try:
         update = update_account_result(
             accounts_path,
             request_id,
             current_mjchip=summary.get("mjchip"),
-            status=status,
-            terminal_reason=terminal_reason,
+            status=stop_policy["accountStatus"],
+            terminal_reason=stop_policy["terminalReason"],
             session_path=str(session_path) if session_path is not None else None,
             completed_hands=summary.get("completedHands"),
+            resume_failure_count=stop_policy.get("resumeFailureCount"),
+            resume_failure_limit=stop_policy.get("resumeFailureLimit"),
+            resume_failure_reason=stop_policy.get("resumeFailureReason"),
+            interrupted_at=stop_policy.get("interruptedAt"),
         )
+        if stop_policy["interrupted"]:
+            append_interrupted_account(
+                source="loop_exception",
+                request_id=request_id,
+                nickname=str(update.get("nickname") or ""),
+                status=stop_policy["accountStatus"],
+                reason=stop_policy["terminalReason"],
+                details={
+                    "resumeFailureCount": stop_policy.get("resumeFailureCount"),
+                    "resumeFailureLimit": stop_policy.get("resumeFailureLimit"),
+                    "summary": public_session_summary(summary),
+                },
+            )
     except Exception as update_exc:
         return {
             "updated": False,
             "error": exception_text(update_exc),
-            "status": status,
-            "terminalReason": terminal_reason,
+            "status": stop_policy["accountStatus"],
+            "terminalReason": stop_policy["terminalReason"],
             "summary": summary,
+            "stopPolicy": stop_policy,
         }
     return {
         "updated": True,
-        "status": status,
-        "terminalReason": terminal_reason,
+        "status": stop_policy["accountStatus"],
+        "terminalReason": stop_policy["terminalReason"],
         "summary": summary,
+        "stopPolicy": stop_policy,
         "account": update,
     }
 
@@ -837,6 +1035,84 @@ def classify_terminal(summary: dict[str, Any], *, target_mjchip: int, bankruptcy
     return {"terminal": False, "terminalReason": reason, "accountStatus": "stopped_" + sanitize(str(reason))}
 
 
+def resolve_account_stop_policy(
+    accounts_path: Path,
+    request_id: str,
+    terminal: dict[str, Any],
+    *,
+    max_resume_failures: int,
+) -> dict[str, Any]:
+    terminal_reason = str(terminal.get("terminalReason") or "nonterminal_stop")
+    account_status = str(terminal.get("accountStatus") or ("stopped_" + sanitize(terminal_reason)))
+    if terminal.get("terminal") is True:
+        return {
+            "terminal": True,
+            "interrupted": False,
+            "accountStatus": account_status,
+            "terminalReason": terminal_reason,
+        }
+
+    failure_limit = max(1, int(max_resume_failures))
+    row = read_account_row(accounts_path, request_id)
+    failure_count = account_resume_failure_count(row, terminal_reason) + 1
+    interrupted = False
+    if should_interrupt_without_retry(terminal_reason, account_status):
+        account_status = "interrupted_" + sanitize(terminal_reason)
+        interrupted = True
+    elif failure_count >= failure_limit:
+        account_status = "interrupted_retry_exhausted_" + sanitize(terminal_reason)
+        interrupted = True
+
+    return {
+        "terminal": False,
+        "interrupted": interrupted,
+        "accountStatus": account_status,
+        "terminalReason": terminal_reason,
+        "resumeFailureCount": failure_count,
+        "resumeFailureLimit": failure_limit,
+        "resumeFailureReason": terminal_reason,
+        "interruptedAt": utc_now() if interrupted else None,
+    }
+
+
+def read_account_row(accounts_path: Path, selector: str) -> dict[str, Any] | None:
+    try:
+        raw = json.loads(accounts_path.read_text(encoding="utf-8-sig"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError, UnicodeError):
+        return None
+    rows = raw.get("accounts") if isinstance(raw, dict) and isinstance(raw.get("accounts"), list) else raw
+    if not isinstance(rows, list):
+        return None
+    normalized = selector.casefold()
+    matches = [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and any(
+            isinstance(value, str) and value.casefold() == normalized
+            for value in (row.get("requestId"), row.get("loginId"), row.get("nickname"))
+        )
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def account_resume_failure_count(row: dict[str, Any] | None, terminal_reason: str) -> int:
+    if not isinstance(row, dict):
+        return 0
+    if row.get("resumeFailureReason") == terminal_reason and isinstance(row.get("resumeFailureCount"), int):
+        return max(0, int(row["resumeFailureCount"]))
+    status = row.get("status")
+    if row.get("lastTerminalReason") == terminal_reason and isinstance(status, str) and status.startswith("stopped_"):
+        return 1
+    return 0
+
+
+def should_interrupt_without_retry(terminal_reason: str, account_status: str) -> bool:
+    if any(terminal_reason.startswith(prefix) for prefix in IMMEDIATE_INTERRUPT_REASON_PREFIXES):
+        return True
+    return any(account_status.startswith(prefix) for prefix in NON_RESUMABLE_STOPPED_STATUS_PREFIXES)
+
+
 def latest_session_report(path: Path) -> tuple[Any, ...] | None:
     rows = read_jsonl(path)
     latest_state = last_of_type(rows, "bot_state")
@@ -884,7 +1160,86 @@ def status_summary(status: dict[str, Any]) -> dict[str, Any]:
 
 def write_loop_status(payload: dict[str, Any]) -> None:
     atomic_write(LOOP_STATUS, payload)
+    write_health_status(payload)
     print(json.dumps({"loop": payload}, ensure_ascii=False), flush=True)
+
+
+def write_health_status(loop_payload: dict[str, Any]) -> None:
+    try:
+        stop_policy = loop_payload.get("stopPolicy") if isinstance(loop_payload.get("stopPolicy"), dict) else {}
+        prep = loop_payload.get("prep") if isinstance(loop_payload.get("prep"), dict) else {}
+        recovery = loop_payload.get("recovery") if isinstance(loop_payload.get("recovery"), dict) else {}
+        latest_interruption = None
+        if stop_policy.get("interrupted"):
+            latest_interruption = {
+                "requestId": loop_payload.get("requestId"),
+                "reason": stop_policy.get("terminalReason"),
+                "status": stop_policy.get("accountStatus"),
+                "resumeFailureCount": stop_policy.get("resumeFailureCount"),
+                "resumeFailureLimit": stop_policy.get("resumeFailureLimit"),
+            }
+        elif prep.get("interrupted"):
+            latest_interruption = {
+                "requestId": prep.get("requestId") or loop_payload.get("requestId"),
+                "reason": prep.get("terminalReason"),
+                "status": prep.get("accountStatus"),
+                "prepRestarts": prep.get("prepRestarts"),
+            }
+        health = {
+            "checkedAt": utc_now(),
+            "source": "loop",
+            "state": loop_payload.get("state"),
+            "attempt": loop_payload.get("attempt"),
+            "iteration": loop_payload.get("iteration"),
+            "count": loop_payload.get("count"),
+            "completed": loop_payload.get("completed"),
+            "failed": loop_payload.get("failed"),
+            "requestId": loop_payload.get("requestId"),
+            "nickname": loop_payload.get("nickname"),
+            "lastProgressAt": loop_payload.get("updatedAt") or utc_now(),
+            "lastRecoveryAction": recovery.get("method") or recovery.get("reason"),
+            "latestInterruption": latest_interruption,
+        }
+        atomic_write(HEALTH_PATH, health)
+    except Exception as exc:
+        print(f"[loop] health write failed: {exception_text(exc)}", flush=True)
+
+
+def append_interrupted_account(
+    *,
+    source: str,
+    request_id: str,
+    nickname: str | None,
+    status: str,
+    reason: str,
+    details: dict[str, Any] | None = None,
+) -> None:
+    record = {
+        "ts": utc_now(),
+        "source": source,
+        "requestId": request_id,
+        "nickname": nickname,
+        "status": status,
+        "reason": reason,
+        "details": details or {},
+    }
+    try:
+        INTERRUPTED_ACCOUNTS_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with INTERRUPTED_ACCOUNTS_LOG.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=True, separators=(",", ":")) + "\n")
+    except Exception as exc:
+        print(f"[loop] interrupted account log write failed: {exception_text(exc)}", flush=True)
+
+
+def public_session_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mjchip": summary.get("mjchip"),
+        "startMjchip": summary.get("startMjchip"),
+        "completedHands": summary.get("completedHands"),
+        "phase": summary.get("phase"),
+        "pauseReason": summary.get("pauseReason"),
+        "hasSummary": summary.get("hasSummary"),
+    }
 
 
 def public_bridge_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -990,7 +1345,15 @@ def load_loop_resume_state(args: argparse.Namespace) -> dict[str, int]:
     if status.get("count") != args.count:
         return {}
     state = status.get("state")
-    if state not in {"failed", "failed_recovered", "account_finished", "resuming_account", "preparing_account", "account_prepared"}:
+    if state not in {
+        "failed",
+        "failed_recovered",
+        "account_finished",
+        "account_prep_interrupted",
+        "resuming_account",
+        "preparing_account",
+        "account_prepared",
+    }:
         return {}
     completed = status.get("completed")
     if completed is None and state == "account_finished":
@@ -1021,6 +1384,15 @@ def find_active_prep_request() -> dict[str, Any] | None:
     return None
 
 
+def should_preserve_prep_state(existing_request: dict[str, Any], existing_status: dict[str, Any]) -> bool:
+    request_id = existing_status.get("requestId") or existing_request.get("id")
+    if not request_id:
+        return False
+    if existing_status.get("active") is True:
+        return True
+    return existing_status.get("accountCaptured") is True and existing_status.get("stage") == "failed"
+
+
 def is_resumable_account(row: dict[str, Any], args: argparse.Namespace) -> bool:
     request_id = row.get("requestId")
     status = row.get("status")
@@ -1029,9 +1401,23 @@ def is_resumable_account(row: dict[str, Any], args: argparse.Namespace) -> bool:
         return False
     if not isinstance(status, str) or not status.startswith("stopped_"):
         return False
+    if is_non_resumable_stopped_account(row):
+        return False
     if not isinstance(mjchip, int):
         return True
     return args.bankruptcy_mjchip < mjchip < args.target_mjchip
+
+
+def is_non_resumable_stopped_account(row: dict[str, Any]) -> bool:
+    status = row.get("status")
+    if isinstance(status, str) and any(
+        status.startswith(prefix) for prefix in NON_RESUMABLE_STOPPED_STATUS_PREFIXES
+    ):
+        return True
+    reason = row.get("lastTerminalReason")
+    return isinstance(reason, str) and any(
+        reason.startswith(prefix) for prefix in NON_RESUMABLE_STOPPED_REASON_PREFIXES
+    )
 
 
 def public_account_row(row: dict[str, Any] | None) -> dict[str, Any] | None:

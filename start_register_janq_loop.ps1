@@ -15,6 +15,8 @@ param(
     [int]$BotMaxHands = 1000000,
     [int]$BotMaxRuntimeSeconds = 8640000,
     [int]$ExitTimeoutSeconds = 25,
+    [int]$MaxAccountResumeFailures = 5,
+    [int]$MaxPrepRestartsPerAccount = 5,
     [ValidateSet("public", "greedy", "route_ev", "route_ev2")]
     [string]$Strategy = "route_ev",
     [switch]$ShowGame,
@@ -30,6 +32,35 @@ $root = (Resolve-Path -LiteralPath $PSScriptRoot).Path
 Set-Location $root
 $env:JANQ_WORKSPACE = $root
 $env:JANQ_PROBE_LOG = Join-Path $root "_runtime\logs\janq_events.jsonl"
+New-Item -ItemType Directory -Force -Path (Join-Path $root "_runtime\register_janq_loop") | Out-Null
+
+$launchArgsPath = Join-Path $root "_runtime\register_janq_loop\launch_args.json"
+[ordered]@{
+    Count = $Count
+    Bet = $Bet
+    TargetMjchip = $TargetMjchip
+    BankruptcyMjchip = $BankruptcyMjchip
+    GameWidth = $GameWidth
+    GameHeight = $GameHeight
+    NicknamePrefix = $NicknamePrefix
+    PrepTimeoutSeconds = $PrepTimeoutSeconds
+    PrepLoadingStallSeconds = $PrepLoadingStallSeconds
+    PrepGenericStallSeconds = $PrepGenericStallSeconds
+    PrepMaxStories = $PrepMaxStories
+    BotMaxHands = $BotMaxHands
+    BotMaxRuntimeSeconds = $BotMaxRuntimeSeconds
+    ExitTimeoutSeconds = $ExitTimeoutSeconds
+    MaxAccountResumeFailures = $MaxAccountResumeFailures
+    MaxPrepRestartsPerAccount = $MaxPrepRestartsPerAccount
+    Strategy = $Strategy
+    ShowGame = [bool]$ShowGame
+    HiddenGame = [bool]$HiddenGame
+    FreshGame = [bool]$FreshGame
+    FreshPrep = [bool]$FreshPrep
+    NoResumeStopped = [bool]$NoResumeStopped
+    ContinueOnError = [bool]$ContinueOnError
+    updatedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $launchArgsPath -Encoding UTF8
 
 function Resolve-PythonExe {
     $pythonCandidates = @(
@@ -71,6 +102,8 @@ $loopArgs = @(
     "--bot-max-hands", "$BotMaxHands",
     "--bot-max-runtime-seconds", "$BotMaxRuntimeSeconds",
     "--exit-timeout-seconds", "$ExitTimeoutSeconds",
+    "--max-account-resume-failures", "$MaxAccountResumeFailures",
+    "--max-prep-restarts-per-account", "$MaxPrepRestartsPerAccount",
     "--strategy", "$Strategy"
 )
 
