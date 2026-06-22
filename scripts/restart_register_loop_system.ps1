@@ -35,28 +35,32 @@ New-Item -ItemType Directory -Force -Path $loopDir | Out-Null
 $wrapperLog = Join-Path $loopDir "wrapper.log"
 $wrapperOut = Join-Path $loopDir "wrapper.process.out.log"
 $wrapperErr = Join-Path $loopDir "wrapper.process.err.log"
-$runArgs = @(
-    "-Count", "$Count",
-    "-Bet", "$Bet",
-    "-TargetMjchip", "$TargetMjchip",
-    "-BankruptcyMjchip", "$BankruptcyMjchip",
-    "-NicknamePrefix", "$NicknamePrefix",
-    "-MaxAccountResumeFailures", "$MaxAccountResumeFailures",
-    "-MaxPrepRestartsPerAccount", "$MaxPrepRestartsPerAccount"
-)
-if ($HiddenGame) { $runArgs += "-HiddenGame" }
-if ($FreshGame) { $runArgs += "-FreshGame" }
-if ($FreshPrep) { $runArgs += "-FreshPrep" }
-if ($ContinueOnError) { $runArgs += "-ContinueOnError" }
-$runArgsJson = $runArgs | ConvertTo-Json -Compress
+$runParams = [ordered]@{
+    Count = $Count
+    Bet = $Bet
+    TargetMjchip = $TargetMjchip
+    BankruptcyMjchip = $BankruptcyMjchip
+    NicknamePrefix = $NicknamePrefix
+    MaxAccountResumeFailures = $MaxAccountResumeFailures
+    MaxPrepRestartsPerAccount = $MaxPrepRestartsPerAccount
+    HiddenGame = [bool]$HiddenGame
+    FreshGame = [bool]$FreshGame
+    FreshPrep = [bool]$FreshPrep
+    ContinueOnError = [bool]$ContinueOnError
+}
+$runParamsJson = $runParams | ConvertTo-Json -Compress
 $wrapperContent = @"
 `$ErrorActionPreference = "Stop"
 try {
     "==== wrapper start `$((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")) ====" | Add-Content -LiteralPath "$wrapperLog" -Encoding UTF8
     Set-Location -LiteralPath "$rootPath"
-    `$runArgs = '$runArgsJson' | ConvertFrom-Json
-    "args: `$((`$runArgs -join ' '))" | Add-Content -LiteralPath "$wrapperLog" -Encoding UTF8
-    & "$startScript" @runArgs *>&1 | Tee-Object -FilePath "$wrapperLog" -Append
+    `$paramObject = '$runParamsJson' | ConvertFrom-Json
+    `$runParams = @{}
+    foreach (`$property in `$paramObject.PSObject.Properties) {
+        `$runParams[`$property.Name] = `$property.Value
+    }
+    "params: `$((`$runParams.GetEnumerator() | Sort-Object Name | ForEach-Object { `$_.Name + '=' + `$_.Value }) -join ' ')" | Add-Content -LiteralPath "$wrapperLog" -Encoding UTF8
+    & "$startScript" @runParams *>&1 | Tee-Object -FilePath "$wrapperLog" -Append
     `$exitCode = `$LASTEXITCODE
     "==== wrapper exit `$exitCode `$((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")) ====" | Add-Content -LiteralPath "$wrapperLog" -Encoding UTF8
     exit `$exitCode
