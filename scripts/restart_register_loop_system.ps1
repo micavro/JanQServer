@@ -54,7 +54,13 @@ exit `$LASTEXITCODE
 "@
 $wrapperContent | Set-Content -LiteralPath $wrapper -Encoding UTF8
 
-& schtasks.exe /End /TN $TaskName 2>$null | Out-Null
+$oldErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+try {
+    & schtasks.exe /End /TN $TaskName *> $null
+} finally {
+    $ErrorActionPreference = $oldErrorActionPreference
+}
 Start-Sleep -Seconds 3
 
 $escapedRoot = [regex]::Escape($rootPath)
